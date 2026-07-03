@@ -1,0 +1,120 @@
+{
+  "_version": "1.17.0",
+  "sap.app": {
+    "id": "zab.be.resa.zuilibrdraw",
+    "type": "component",
+    "i18n": "i18n/i18n.properties",
+    "applicationVersion": {
+      "version": "0.0.1"
+    },
+    "title": "{{appTitle}}",
+    "description": "{{appDescription}}",
+    "resources": "resources.json",
+    "sourceTemplate": {
+      "id": "@sap/generator-fiori:basic",
+      "version": "1.13.6"
+    },
+    "crossNavigation": {
+      "inbounds": {
+        "zuilibrdraw-display": {
+          "semanticObject": "ZuiAbLibrDraw",
+          "action": "display",
+          "title": "{{appTitle}}",
+          "signature": {
+            "parameters": {},
+            "additionalParameters": "allowed"
+          }
+        }
+      }
+    }
+  },
+  "sap.ui": {
+    "technology": "UI5",
+    "icons": {
+      "icon": "",
+      "favIcon": "",
+      "phone": "",
+      "phone@2": "",
+      "tablet": "",
+      "tablet@2": ""
+    },
+    "deviceTypes": {
+      "desktop": true,
+      "tablet": true,
+      "phone": true
+    }
+  },
+  "sap.fiori": {
+    "registrationIds": [],
+    "archeType": "reusecomponent"
+  },
+  "sap.ui5": {
+    "flexEnabled": false,
+    "dependencies": {
+      "minUI5Version": "1.71.58",
+      "libs": {
+        "sap.m": {},
+        "sap.ui.core": {},
+        "sap.suite.ui.generic.template": {}
+      }
+    },
+    "contentDensities": {
+      "compact": true,
+      "cozy": true
+    },
+    "models": {
+      "i18n": {
+        "type": "sap.ui.model.resource.ResourceModel",
+        "settings": {
+          "bundleName": "zab.be.resa.zuilibrdraw.i18n.i18n",
+          "supportedLocales": [
+            ""
+          ],
+          "fallbackLocale": ""
+        }
+      }
+    },
+    "resources": {
+      "css": [
+        {
+          "uri": "css/style.css"
+        }
+      ]
+    },
+    "routing": {
+      "config": {
+        "routerClass": "sap.m.routing.Router",
+        "viewType": "XML",
+        "async": true,
+        "viewPath": "zab.be.resa.zuilibrdraw.view",
+        "controlAggregation": "pages",
+        "controlId": "app",
+        "clearControlAggregation": false
+      },
+      "routes": [
+        {
+          "name": "RouteDraw",
+          "pattern": ":?query:",
+          "target": [
+            "TargetDraw"
+          ]
+        }
+      ],
+      "targets": {
+        "TargetDraw": {
+          "viewType": "XML",
+          "transition": "slide",
+          "clearControlAggregation": false,
+          "viewId": "Draw",
+          "viewName": "Draw"
+        }
+      }
+    },
+    "rootView": {
+      "viewName": "zab.be.resa.zuilibrdraw.view.Draw",
+      "type": "XML",
+      "async": true,
+      "id": "Draw"
+    }
+  }
+}
