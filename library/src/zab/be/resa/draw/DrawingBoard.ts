@@ -132,7 +132,8 @@ export default class DrawingBoard extends Control {
 	private _shapeIdCounter!: number;
 	private _groupIdCounter!: number;
 	private _redoStack!: Shape[][];
-	private _canvasReady!: boolean;
+	private _boundCanvas!: HTMLCanvasElement | null;
+	private _windowBound!: boolean;
 	private _retrySetupTimer!: number | null;
 	private _resizeObserver!: ResizeObserver | null;
 	private _container!: HTMLElement | null;
@@ -169,7 +170,8 @@ export default class DrawingBoard extends Control {
 		this._shapeIdCounter = 1;
 		this._groupIdCounter = 1;
 		this._redoStack = [];
-		this._canvasReady = false;
+		this._boundCanvas = null;
+		this._windowBound = false;
 		this._retrySetupTimer = null;
 		this._resizeObserver = null;
 		this._container = null;
@@ -206,16 +208,13 @@ export default class DrawingBoard extends Control {
 			this._resizeObserver.disconnect();
 			this._resizeObserver = null;
 		}
-		if (!this._canvas || !this._canvasReady) {
-			return;
+		this._detachCanvasListeners(this._boundCanvas);
+		this._boundCanvas = null;
+		if (this._windowBound) {
+			window.removeEventListener("resize", this._boundHandlers.onResize);
+			window.removeEventListener("keydown", this._boundHandlers.onKeyDown);
+			this._windowBound = false;
 		}
-		this._canvas.removeEventListener("pointerdown", this._boundHandlers.onPointerDown);
-		this._canvas.removeEventListener("pointermove", this._boundHandlers.onPointerMove);
-		this._canvas.removeEventListener("pointerup", this._boundHandlers.onPointerUp);
-		this._canvas.removeEventListener("pointerleave", this._boundHandlers.onPointerUp);
-		this._canvas.removeEventListener("wheel", this._boundHandlers.onWheel);
-		window.removeEventListener("resize", this._boundHandlers.onResize);
-		window.removeEventListener("keydown", this._boundHandlers.onKeyDown);
 	}
 
 	/**
@@ -465,32 +464,54 @@ export default class DrawingBoard extends Control {
 			return;
 		}
 
-		if (!this._canvasReady) {
+		// UI5 peut recréer l'élément <canvas> à chaque nouveau rendu (une page objet
+		// re-rend ses sections lorsqu'elles deviennent visibles). Il faut donc
+		// (re)brancher les écouteurs dès que le nœud canevas a changé, sinon la
+		// souris cesse de fonctionner après un re-rendu.
+		if (this._boundCanvas !== this._canvas) {
+			this._detachCanvasListeners(this._boundCanvas);
 			this._canvas.style.touchAction = "none";
 			this._canvas.addEventListener("pointerdown", this._boundHandlers.onPointerDown);
 			this._canvas.addEventListener("pointermove", this._boundHandlers.onPointerMove);
 			this._canvas.addEventListener("pointerup", this._boundHandlers.onPointerUp);
 			this._canvas.addEventListener("pointerleave", this._boundHandlers.onPointerUp);
 			this._canvas.addEventListener("wheel", this._boundHandlers.onWheel, { passive: false });
+			this._boundCanvas = this._canvas;
+		}
+
+		if (!this._windowBound) {
 			window.addEventListener("resize", this._boundHandlers.onResize);
 			window.addEventListener("keydown", this._boundHandlers.onKeyDown);
+			this._windowBound = true;
+		}
 
-			// Posé dans une page objet (ou un shell FLP), le contrôle peut être rendu
-			// alors qu'il est encore masqué / dans la zone de préservation du DOM d'UI5,
-			// c.-à-d. avec un conteneur de taille nulle, puis révélé plus tard sans qu'aucun
-			// événement "resize" ne se déclenche. Un dimensionnement unique dans
-			// onAfterRendering fige donc le canevas à 0x0 et il reste vide. Observer le
-			// conteneur fait que le canevas se (re)dimensionne et repeint la grille dès
-			// qu'il obtient de vraies dimensions, quel que soit le contexte d'hébergement.
-			if (typeof ResizeObserver !== "undefined") {
-				this._resizeObserver = new ResizeObserver(this._boundHandlers.onResize);
-				this._resizeObserver.observe(this._container);
+		// Posé dans une page objet (ou un shell FLP), le contrôle peut être rendu
+		// alors qu'il est encore masqué / dans la zone de préservation du DOM d'UI5,
+		// c.-à-d. avec un conteneur de taille nulle, puis révélé plus tard sans qu'aucun
+		// événement "resize" ne se déclenche. Un dimensionnement unique dans
+		// onAfterRendering fige donc le canevas à 0x0 et il reste vide. Observer le
+		// conteneur fait que le canevas se (re)dimensionne et repeint la grille dès
+		// qu'il obtient de vraies dimensions, quel que soit le contexte d'hébergement.
+		if (typeof ResizeObserver !== "undefined") {
+			if (this._resizeObserver) {
+				this._resizeObserver.disconnect();
 			}
-
-			this._canvasReady = true;
+			this._resizeObserver = new ResizeObserver(this._boundHandlers.onResize);
+			this._resizeObserver.observe(this._container);
 		}
 
 		this._resizeCanvas();
+	}
+
+	private _detachCanvasListeners(oCanvas: HTMLCanvasElement | null): void {
+		if (!oCanvas) {
+			return;
+		}
+		oCanvas.removeEventListener("pointerdown", this._boundHandlers.onPointerDown);
+		oCanvas.removeEventListener("pointermove", this._boundHandlers.onPointerMove);
+		oCanvas.removeEventListener("pointerup", this._boundHandlers.onPointerUp);
+		oCanvas.removeEventListener("pointerleave", this._boundHandlers.onPointerUp);
+		oCanvas.removeEventListener("wheel", this._boundHandlers.onWheel);
 	}
 
 	private _resizeCanvas(): void {
