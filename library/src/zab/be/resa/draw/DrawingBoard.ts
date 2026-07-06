@@ -1,11 +1,19 @@
-import BaseController from "./Base.controller";
-import MessageToast from "sap/m/MessageToast";
+import Control from "sap/ui/core/Control";
+import Core from "sap/ui/core/Core";
+import ResourceBundle from "sap/base/i18n/ResourceBundle";
 import Event from "sap/ui/base/Event";
+import OverflowToolbar from "sap/m/OverflowToolbar";
+import ToolbarSeparator from "sap/m/ToolbarSeparator";
+import Title from "sap/m/Title";
+import Label from "sap/m/Label";
+import Button from "sap/m/Button";
 import Slider from "sap/m/Slider";
 import Select from "sap/m/Select";
+import SegmentedButton from "sap/m/SegmentedButton";
 import SegmentedButtonItem from "sap/m/SegmentedButtonItem";
-import HTML from "sap/ui/core/HTML";
-import type Component from "../Component";
+import Item from "sap/ui/core/Item";
+import MessageToast from "sap/m/MessageToast";
+import DrawingBoardRenderer from "./DrawingBoardRenderer";
 
 interface Point {
 	x: number;
@@ -88,9 +96,37 @@ interface BoundHandlers {
 }
 
 /**
- * @namespace zab.be.resa.zuilibrdraw.controller
+ * Tableau de dessin autonome basé sur un canevas HTML.
+ *
+ * Le contrôle construit sa propre barre d'outils (crayon, formes, préréglages,
+ * zoom, annulation, export JPG) et gère intégralement le rendu sur canevas.
+ * Il peut être posé tel quel dans n'importe quelle vue XML :
+ *
+ * <pre>
+ *   &lt;draw:DrawingBoard editable="true" height="70vh" /&gt;
+ * </pre>
+ *
+ * @namespace zab.be.resa.draw
  */
-export default class Draw extends BaseController {
+export default class DrawingBoard extends Control {
+
+	public static readonly metadata = {
+		library: "zab.be.resa.draw",
+		properties: {
+			/** Autorise ou non l'édition (barre d'outils active et interactions pointeur). */
+			editable: { type: "boolean", defaultValue: true },
+			/** Largeur du contrôle. */
+			width: { type: "sap.ui.core.CSSSize", defaultValue: "100%" },
+			/** Hauteur du contrôle. */
+			height: { type: "sap.ui.core.CSSSize", defaultValue: "100%" }
+		},
+		aggregations: {
+			/** Barre d'outils construite par le contrôle lui-même. */
+			_toolbar: { type: "sap.m.OverflowToolbar", multiple: false, visibility: "hidden" }
+		}
+	};
+
+	public static renderer = DrawingBoardRenderer;
 
 	private _state!: DrawState;
 	private _shapeIdCounter!: number;
@@ -103,12 +139,18 @@ export default class Draw extends BaseController {
 	private _canvas!: HTMLCanvasElement | null;
 	private _ctx!: CanvasRenderingContext2D | null;
 	private _boundHandlers!: BoundHandlers;
+	private _bundle!: ResourceBundle;
+
+	private _toolSelector!: SegmentedButton;
+	private _presetSelect!: Select;
+	private _zoomSlider!: Slider;
+	private _interactiveControls!: Array<{ setEnabled(b: boolean): unknown }>;
 
 	/* =========================================================== */
 	/* méthodes de cycle de vie                                    */
 	/* =========================================================== */
 
-	public onInit(): void {
+	public init(): void {
 		this._state = {
 			tool: "pen",
 			zoom: 1,
@@ -142,8 +184,9 @@ export default class Draw extends BaseController {
 			onKeyDown: this._onKeyDown.bind(this)
 		};
 
-		// Enregistre la vue sur le composant réutilisable afin que setContext() puisse atteindre ce contrôleur.
-		(this.getOwnerComponent() as Component).setView(this.getView());
+		this._bundle = Core.getLibraryResourceBundle("zab.be.resa.draw") as ResourceBundle;
+		this._buildToolbar();
+		this._applyEditable();
 	}
 
 	public onAfterRendering(): void {
@@ -154,7 +197,7 @@ export default class Draw extends BaseController {
 		this._retrySetupTimer = window.setTimeout(this._setupCanvas.bind(this), 0);
 	}
 
-	public onExit(): void {
+	public exit(): void {
 		if (this._retrySetupTimer) {
 			window.clearTimeout(this._retrySetupTimer);
 			this._retrySetupTimer = null;
@@ -176,25 +219,124 @@ export default class Draw extends BaseController {
 	}
 
 	/**
-	 * Point d'entrée appelé par le composant réutilisable (Component#setContext).
-	 * Réinitialise le canevas lorsque le composant est (ré)intégré.
+	 * Bascule l'état éditable : (dés)active la barre d'outils sans re-rendu.
 	 */
-	public drawInit(): void {
-		this._setupCanvas();
+	public setEditable(bEditable: boolean): this {
+		this.setProperty("editable", bEditable, true);
+		this._applyEditable();
+		return this;
+	}
+
+	/* =========================================================== */
+	/* construction de la barre d'outils                           */
+	/* =========================================================== */
+
+	private _getText(sTextId: string): string {
+		return this._bundle.getText(sTextId) ?? sTextId;
+	}
+
+	private _buildToolbar(): void {
+		this._toolSelector = new SegmentedButton({
+			selectedKey: "pen",
+			selectionChange: this._onToolChange.bind(this),
+			items: [
+				new SegmentedButtonItem({ key: "pen", text: this._getText("toolPen") }),
+				new SegmentedButtonItem({ key: "line", text: this._getText("toolLine") }),
+				new SegmentedButtonItem({ key: "rect", text: this._getText("toolRect") }),
+				new SegmentedButtonItem({ key: "circle", text: this._getText("toolCircle") }),
+				new SegmentedButtonItem({ key: "select", text: this._getText("toolSelect") }),
+				new SegmentedButtonItem({ key: "pan", text: this._getText("toolPan") })
+			]
+		});
+
+		this._presetSelect = new Select({
+			width: "11rem",
+			selectedKey: "house",
+			items: [
+				new Item({ key: "house", text: this._getText("presetHouse") }),
+				new Item({ key: "car", text: this._getText("presetCar") }),
+				new Item({ key: "tree", text: this._getText("presetTree") }),
+				new Item({ key: "sun", text: this._getText("presetSun") }),
+				new Item({ key: "boat", text: this._getText("presetBoat") }),
+				new Item({ key: "cloud", text: this._getText("presetCloud") })
+			]
+		});
+
+		this._zoomSlider = new Slider({
+			width: "11rem",
+			min: 0.25,
+			max: 4,
+			step: 0.05,
+			value: 1,
+			liveChange: this._onZoomSliderChange.bind(this)
+		});
+
+		const oInsertButton = new Button({ text: this._getText("insertObject"), press: this._onInsertPresetButtonPress.bind(this) });
+		const oResetButton = new Button({ text: this._getText("resetView"), press: this._onResetView.bind(this) });
+		const oUndoButton = new Button({ text: this._getText("undo"), press: this._onUndo.bind(this) });
+		const oSmallerButton = new Button({ text: this._getText("decreaseSize"), press: this._onSmallerButtonPress.bind(this) });
+		const oLargerButton = new Button({ text: this._getText("increaseSize"), press: this._onLargerButtonPress.bind(this) });
+		const oClearButton = new Button({ text: this._getText("clear"), type: "Reject", press: this._onClear.bind(this) });
+		const oDownloadButton = new Button({ text: this._getText("downloadJpg"), type: "Emphasized", press: this._onDownloadJpg.bind(this) });
+
+		const oToolbar = new OverflowToolbar({
+			content: [
+				new Title({ text: this._getText("toolsTitle") }),
+				this._toolSelector,
+				new ToolbarSeparator(),
+				new Label({ text: this._getText("objectsLabel") }),
+				this._presetSelect,
+				oInsertButton,
+				new ToolbarSeparator(),
+				new Label({ text: this._getText("zoomLabel") }),
+				this._zoomSlider,
+				oResetButton,
+				oUndoButton,
+				oSmallerButton,
+				oLargerButton,
+				oClearButton,
+				oDownloadButton
+			]
+		});
+
+		this._interactiveControls = [
+			this._toolSelector,
+			this._presetSelect,
+			this._zoomSlider,
+			oInsertButton,
+			oResetButton,
+			oUndoButton,
+			oSmallerButton,
+			oLargerButton,
+			oClearButton,
+			oDownloadButton
+		];
+
+		this.setAggregation("_toolbar", oToolbar);
+	}
+
+	private _applyEditable(): void {
+		if (!this._interactiveControls) {
+			return;
+		}
+		const bEditable = this.getProperty("editable") as boolean;
+		this._interactiveControls.forEach((oControl) => {
+			oControl.setEnabled(bEditable);
+		});
 	}
 
 	/* =========================================================== */
 	/* gestionnaires d'événements                                  */
 	/* =========================================================== */
 
-	public onToolChange(oEvent: Event): void {
+	private _onToolChange(oEvent: Event): void {
 		const oItem = oEvent.getParameter("item") as SegmentedButtonItem;
 		this._state.tool = oItem.getKey();
 		this._state.selectedShapeId = null;
 		this._render();
 	}
 
-	public onZoomSliderChange(oEvent: Event): void {
+	private _onZoomSliderChange(oEvent: Event): void {
 		if (!this._canvas) {
 			return;
 		}
@@ -206,15 +348,15 @@ export default class Draw extends BaseController {
 		this._setZoom(fZoom, oCenter);
 	}
 
-	public onResetView(): void {
+	private _onResetView(): void {
 		this._state.zoom = 1;
 		this._state.panX = 0;
 		this._state.panY = 0;
-		(this.byId("zoomSlider") as Slider).setValue(1, {});
+		this._zoomSlider.setValue(1);
 		this._render();
 	}
 
-	public onUndo(): void {
+	private _onUndo(): void {
 		const aUndoneShapes = this._collectUndoBatchFromTail();
 		if (aUndoneShapes.length === 0) {
 			return;
@@ -224,7 +366,7 @@ export default class Draw extends BaseController {
 		this._render();
 	}
 
-	public onRedo(): void {
+	private _onRedo(): void {
 		const aRedoShapes = this._redoStack.pop();
 		if (!aRedoShapes || aRedoShapes.length === 0) {
 			return;
@@ -234,21 +376,20 @@ export default class Draw extends BaseController {
 		this._render();
 	}
 
-	public onSmallerButtonPress(): void {
+	private _onSmallerButtonPress(): void {
 		this._scaleSelectedShape(0.9);
 	}
 
-	public onLargerButtonPress(): void {
+	private _onLargerButtonPress(): void {
 		this._scaleSelectedShape(1.1);
 	}
 
-	public onInsertPresetButtonPress(): void {
+	private _onInsertPresetButtonPress(): void {
 		if (!this._canvas) {
 			return;
 		}
 
-		const oPresetSelect = this.byId("presetSelect") as Select;
-		const sPreset = oPresetSelect.getSelectedKey() || "house";
+		const sPreset = this._presetSelect.getSelectedKey() || "house";
 		const oCenterScreen: Point = {
 			x: this._canvas.clientWidth / 2,
 			y: this._canvas.clientHeight / 2
@@ -262,16 +403,16 @@ export default class Draw extends BaseController {
 		this._render();
 	}
 
-	public onClear(): void {
+	private _onClear(): void {
 		this._state.shapes = [];
 		this._redoStack = [];
 		this._state.draft = null;
 		this._state.selectedShapeId = null;
 		this._render();
-		MessageToast.show(this.getI18nText("canvasCleared"));
+		MessageToast.show(this._getText("canvasCleared"));
 	}
 
-	public onDownloadJpg(): void {
+	private _onDownloadJpg(): void {
 		if (!this._canvas) {
 			return;
 		}
@@ -297,13 +438,13 @@ export default class Draw extends BaseController {
 				window.setTimeout(() => {
 					URL.revokeObjectURL(sObjectUrl);
 				}, 1000);
-				MessageToast.show(this.getI18nText("downloadSuccess"));
+				MessageToast.show(this._getText("downloadSuccess"));
 			}, "image/jpeg", 0.92);
 			return;
 		}
 
 		fnDownload(oCanvas.toDataURL("image/jpeg", 0.92));
-		MessageToast.show(this.getI18nText("downloadSuccess"));
+		MessageToast.show(this._getText("downloadSuccess"));
 	}
 
 	/* =========================================================== */
@@ -311,19 +452,14 @@ export default class Draw extends BaseController {
 	/* =========================================================== */
 
 	private _setupCanvas(): void {
-		const oDrawingHost = this.byId("drawingHost") as HTML;
-		if (!oDrawingHost) {
-			return;
-		}
-
-		const oHost = oDrawingHost.getDomRef();
+		const oHost = this.getDomRef();
 		if (!oHost) {
 			this._retrySetupTimer = window.setTimeout(this._setupCanvas.bind(this), 60);
 			return;
 		}
 
-		this._container = (oHost.querySelector(".db-root") || document.querySelector(".db-root")) as HTMLElement | null;
-		this._canvas = (oHost.querySelector(".db-canvas") || document.querySelector(".db-canvas")) as HTMLCanvasElement | null;
+		this._container = oHost.querySelector(".db-root") as HTMLElement | null;
+		this._canvas = oHost.querySelector(".db-canvas") as HTMLCanvasElement | null;
 		if (!this._container || !this._canvas) {
 			this._retrySetupTimer = window.setTimeout(this._setupCanvas.bind(this), 60);
 			return;
@@ -339,14 +475,13 @@ export default class Draw extends BaseController {
 			window.addEventListener("resize", this._boundHandlers.onResize);
 			window.addEventListener("keydown", this._boundHandlers.onKeyDown);
 
-			// En tant que composant réutilisable intégré dans un smart template (ou
-			// lancé dans le shell FLP), cette vue peut être rendue alors qu'elle est
-			// encore masquée / dans la zone de préservation du DOM d'UI5, c.-à-d. avec
-			// un conteneur de taille nulle, puis révélée plus tard sans qu'aucun
+			// Posé dans une page objet (ou un shell FLP), le contrôle peut être rendu
+			// alors qu'il est encore masqué / dans la zone de préservation du DOM d'UI5,
+			// c.-à-d. avec un conteneur de taille nulle, puis révélé plus tard sans qu'aucun
 			// événement "resize" ne se déclenche. Un dimensionnement unique dans
-			// onAfterRendering fige donc le canevas à 0x0 et il reste vide.
-			// Observer le conteneur fait que le canevas se (re)dimensionne et repeint
-			// la grille dès qu'il obtient de vraies dimensions, quel que soit le contexte d'hébergement.
+			// onAfterRendering fige donc le canevas à 0x0 et il reste vide. Observer le
+			// conteneur fait que le canevas se (re)dimensionne et repeint la grille dès
+			// qu'il obtient de vraies dimensions, quel que soit le contexte d'hébergement.
 			if (typeof ResizeObserver !== "undefined") {
 				this._resizeObserver = new ResizeObserver(this._boundHandlers.onResize);
 				this._resizeObserver.observe(this._container);
@@ -383,7 +518,7 @@ export default class Draw extends BaseController {
 	/* =========================================================== */
 
 	private _onPointerDown(oEvent: PointerEvent): void {
-		if (!this._ctx || !this._canvas) {
+		if (!this._ctx || !this._canvas || !(this.getProperty("editable") as boolean)) {
 			return;
 		}
 		oEvent.preventDefault();
@@ -483,6 +618,10 @@ export default class Draw extends BaseController {
 	}
 
 	private _onKeyDown(oEvent: KeyboardEvent): void {
+		if (!(this.getProperty("editable") as boolean)) {
+			return;
+		}
+
 		const oTarget = oEvent.target;
 		if (oTarget instanceof HTMLElement) {
 			const bTyping = !!oTarget.closest("input, textarea, [contenteditable='true']");
@@ -499,13 +638,13 @@ export default class Draw extends BaseController {
 		const sKey = oEvent.key.toLowerCase();
 		if (sKey === "z" && !oEvent.shiftKey) {
 			oEvent.preventDefault();
-			this.onUndo();
+			this._onUndo();
 			return;
 		}
 
 		if (sKey === "y" || (sKey === "z" && oEvent.shiftKey)) {
 			oEvent.preventDefault();
-			this.onRedo();
+			this._onRedo();
 		}
 	}
 
@@ -557,7 +696,7 @@ export default class Draw extends BaseController {
 		this._state.zoom = fNewZoom;
 		this._state.panX = oAnchor.x - oBefore.x * this._state.zoom;
 		this._state.panY = oAnchor.y - oBefore.y * this._state.zoom;
-		(this.byId("zoomSlider") as Slider).setValue(fNewZoom, {});
+		this._zoomSlider.setValue(fNewZoom);
 		this._render();
 	}
 
@@ -865,7 +1004,7 @@ export default class Draw extends BaseController {
 	}
 
 	private _showSelectObjectMessage(): void {
-		MessageToast.show(this.getI18nText("selectObjectFirst"));
+		MessageToast.show(this._getText("selectObjectFirst"));
 	}
 
 	private _hitTest(oWorld: Point): Shape | null {

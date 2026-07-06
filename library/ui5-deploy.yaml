@@ -1,14 +1,15 @@
 # yaml-language-server: $schema=https://sap.github.io/ui5-tooling/schema/ui5.yaml.json
+#
+# Déploiement de la bibliothèque zab.be.resa.draw comme BSP autonome.
+# La tâche ui5-task-flatten-library aplatit l'arborescence /resources/<namespace>
+# afin que la bibliothèque puisse être déployée comme une application BSP et
+# servie sous /resources/zab/be/resa/draw sur le serveur ABAP.
 
 specVersion: "3.1"
 metadata:
-  name: zab.be.resa.zuidrawapp
-type: application
+  name: zab.be.resa.draw
+type: library
 builder:
-  resources:
-    excludes:
-      - /test/**
-      - /localService/**
   customTasks:
     - name: ui5-tooling-transpile-task
       afterTask: replaceVersion
@@ -17,16 +18,16 @@ builder:
         removeConsoleStatements: true
         transpileAsync: true
         transpileTypeScript: true
+    - name: ui5-task-flatten-library
+      afterTask: generateLibraryPreload
     - name: deploy-to-abap
-      afterTask: generateCachebusterInfo
+      afterTask: ui5-task-flatten-library
       configuration:
         target:
           destination: DTACLNT300
           url: http://resawdt:45300
         app:
-          name: ZUI_AB_DRAW_APP
-          description: "AB : Draw App"
+          name: ZUI_AB_LIBR_DRAW
+          description: "AB : Draw Manage Library"
           package: ZTEC_AB
           transport: REPLACE_WITH_TRANSPORT
-        exclude:
-          - /test/

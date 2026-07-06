@@ -1,11 +1,17 @@
+/* ================================================================== */
+/* Bibliothèque zab.be.resa.draw - contrôle DrawingBoard (thème base). */
+/* ================================================================== */
+
 .drawingShell {
 	height: 100%;
 	padding: 0.5rem;
 	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
 }
 
-.db-root {
-	height: calc(100vh - 11.5rem);
+.drawingShell .db-root {
+	flex: 1 1 auto;
 	min-height: 320px;
 	border: 1px solid #cbd8e6;
 	border-radius: 0.5rem;
@@ -14,15 +20,9 @@
 	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
-.db-canvas {
+.drawingShell .db-canvas {
 	width: 100%;
 	height: 100%;
 	display: block;
 	cursor: crosshair;
-}
-
-@media (max-width: 700px) {
-	.db-root {
-		height: calc(100vh - 15rem);
-	}
 }

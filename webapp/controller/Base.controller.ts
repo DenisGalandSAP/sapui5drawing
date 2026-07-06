@@ -7,7 +7,7 @@ import ResourceBundle from "sap/base/i18n/ResourceBundle";
 import Router from "sap/ui/core/routing/Router";
 
 /**
- * @namespace zab.be.resa.zuilibrdraw.controller
+ * @namespace zab.be.resa.zuidrawapp.controller
  */
 export default class Base extends Controller {
 

@@ -2,7 +2,7 @@
 
 specVersion: "3.1"
 metadata:
-  name: zab.be.resa.zuilibrdraw
+  name: zab.be.resa.zuidrawapp
 type: application
 resources:
   configuration:
@@ -10,6 +10,16 @@ resources:
       webapp: webapp
 server:
   customMiddleware:
+    # Sert la bibliothèque zab.be.resa.draw (construite dans library/dist) comme
+    # une vraie bibliothèque SAPUI5, sous /resources/zab/be/resa/draw. Doit être
+    # enregistré AVANT le proxy afin que ce chemin soit servi localement et non
+    # transféré vers ui5.sap.com.
+    - name: fiori-tools-servestatic
+      afterMiddleware: compression
+      configuration:
+        paths:
+          - path: /resources/zab/be/resa/draw
+            src: "library/dist/resources/zab/be/resa/draw"
     - name: ui5-tooling-transpile-middleware
       afterMiddleware: compression
       configuration:
@@ -17,7 +27,9 @@ server:
         transpileAsync: true
         transpileTypeScript: true
     - name: fiori-tools-proxy
-      afterMiddleware: compression
+      # Enregistré APRÈS servestatic pour que /resources/zab/be/resa/draw soit
+      # servi localement et ne soit pas transféré vers ui5.sap.com.
+      afterMiddleware: fiori-tools-servestatic
       configuration:
         ignoreCertError: false # If set to true, certificate errors will be ignored. E.g. self-signed certificates will be accepted
         ui5:
@@ -38,7 +50,7 @@ server:
     - name: fiori-tools-preview
       afterMiddleware: fiori-tools-appreload
       configuration:
-        component: zab.be.resa.zuilibrdraw
+        component: zab.be.resa.zuidrawapp
         ui5Theme: sap_fiori_3
 builder:
   customTasks:
@@ -52,4 +64,4 @@ builder:
     - name: ui5-task-zipper
       afterTask: generateComponentPreload
       configuration:
-        archiveName: zab.be.resa.zuilibrdraw-content
+        archiveName: zab.be.resa.zuidrawapp-content

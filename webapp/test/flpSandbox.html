@@ -19,7 +19,7 @@
         data-sap-ui-bindingSyntax="complex"
         data-sap-ui-async="true"
         data-sap-ui-resourceroots='{
-            "zab.be.resa.zuilibrdraw": "../"
+            "zab.be.resa.zuidrawapp": "../"
         }'>
     </script>
 
@@ -30,11 +30,11 @@
                 "sap/ui/model/resource/ResourceModel"
             ], function (XMLView, ResourceModel) {
                 var oI18nModel = new ResourceModel({
-                    bundleName: "zab.be.resa.zuilibrdraw.i18n.i18n"
+                    bundleName: "zab.be.resa.zuidrawapp.i18n.i18n"
                 });
 
                 XMLView.create({
-                    viewName: "zab.be.resa.zuilibrdraw.view.Main"
+                    viewName: "zab.be.resa.zuidrawapp.view.Main"
                 }).then(function (oView) {
                     oView.setModel(oI18nModel, "i18n");
                     oView.placeAt("content");

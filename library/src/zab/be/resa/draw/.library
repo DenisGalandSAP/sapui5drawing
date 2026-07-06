@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<library xmlns="http://www.sap.com/sap.ui.library.xsd">
+    <name>zab.be.resa.draw</name>
+    <vendor>Prayon</vendor>
+    <copyright>Prayon</copyright>
+    <version>0.0.1</version>
+    <documentation>Bibliothèque de dessin réutilisable (contrôle DrawingBoard).</documentation>
+
+    <dependencies>
+        <dependency>
+            <libraryName>sap.ui.core</libraryName>
+        </dependency>
+        <dependency>
+            <libraryName>sap.m</libraryName>
+        </dependency>
+    </dependencies>
+</library>

@@ -1,11 +1,10 @@
 <mvc:View
-    controllerName="zab.be.resa.zuilibrdraw.controller.Main"
+    controllerName="zab.be.resa.zuidrawapp.controller.Main"
     displayBlock="true"
     height="100%"
     xmlns="sap.uxap"
     xmlns:mvc="sap.ui.core.mvc"
-    xmlns:m="sap.m"
-    xmlns:core="sap.ui.core"
+    xmlns:draw="zab.be.resa.draw"
 >
     <ObjectPageLayout
         id="objectPageLayout"
@@ -23,13 +22,10 @@
                 <subSections>
                     <ObjectPageSubSection>
                         <blocks>
-                            <core:ComponentContainer
-                                name="zab.be.resa.zuilibrdraw"
-                                manifest="true"
-                                async="true"
+                            <draw:DrawingBoard
+                                editable="true"
                                 width="100%"
                                 height="70vh"
-                                lifecycle="Container"
                             />
                         </blocks>
                     </ObjectPageSubSection>

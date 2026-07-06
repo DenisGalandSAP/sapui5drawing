@@ -2,7 +2,7 @@
 
 specVersion: "3.1"
 metadata:
-  name: zab.be.resa.zuilibrdraw
+  name: zab.be.resa.zuidrawapp
 type: application
 framework:
   name: SAPUI5
@@ -10,10 +10,16 @@ framework:
   libraries:
     - name: sap.m
     - name: sap.ui.core
-    - name: sap.suite.ui.generic.template
+    - name: sap.uxap
     - name: themelib_sap_fiori_3
 server:
   customMiddleware:
+    - name: fiori-tools-servestatic
+      afterMiddleware: compression
+      configuration:
+        paths:
+          - path: /resources/zab/be/resa/draw
+            src: "library/dist/resources/zab/be/resa/draw"
     - name: ui5-tooling-transpile-middleware
       afterMiddleware: compression
       configuration:
@@ -37,5 +43,5 @@ server:
     - name: fiori-tools-preview
       afterMiddleware: fiori-tools-appreload
       configuration:
-        component: zab.be.resa.zuilibrdraw
+        component: zab.be.resa.zuidrawapp
         ui5Theme: sap_fiori_3

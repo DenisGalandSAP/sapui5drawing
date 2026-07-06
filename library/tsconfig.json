@@ -13,23 +13,23 @@
     "strict": true,
     "strictNullChecks": false,
     "noImplicitAny": true,
-    "noEmit": true,
-    "rootDir": "webapp",
+    "rootDir": "src",
     "baseUrl": "./",
     "paths": {
-      "zab/be/resa/zuidrawapp/*": [
-        "./webapp/*"
+      "zab/be/resa/draw/*": [
+        "./src/zab/be/resa/draw/*"
       ]
     },
     "typeRoots": [
-      "./node_modules/@types",
-      "./node_modules/@sapui5"
+      "../node_modules/@types",
+      "../node_modules/@sapui5"
     ],
     "types": [
       "ts-types-esm"
-    ]
+    ],
+    "noEmit": true
   },
   "include": [
-    "webapp/**/*.ts"
+    "src/**/*.ts"
   ]
 }

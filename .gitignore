@@ -1,5 +1,6 @@
 node_modules/
 dist/
+library/dist/
 .scp/
 .env
 Makefile*.mta

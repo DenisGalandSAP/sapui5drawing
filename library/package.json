@@ -1,0 +1,25 @@
+{
+  "name": "zab.be.resa.draw",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Bibliothèque SAPUI5 de dessin (contrôle DrawingBoard).",
+  "keywords": [
+    "ui5",
+    "sapui5",
+    "library"
+  ],
+  "devDependencies": {
+    "@sapui5/ts-types-esm": "1.90.0",
+    "@ui5/cli": "^4.0.43",
+    "typescript": "^5.4.5",
+    "ui5-tooling-transpile": "^3.11.3"
+  },
+  "scripts": {
+    "build": "ui5 build --config ./ui5.yaml --clean-dest --dest dist"
+  },
+  "ui5": {
+    "dependencies": [
+      "ui5-tooling-transpile"
+    ]
+  }
+}

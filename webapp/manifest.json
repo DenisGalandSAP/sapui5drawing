@@ -1,8 +1,8 @@
 {
   "_version": "1.17.0",
   "sap.app": {
-    "id": "zab.be.resa.zuilibrdraw",
-    "type": "component",
+    "id": "zab.be.resa.zuidrawapp",
+    "type": "application",
     "i18n": "i18n/i18n.properties",
     "applicationVersion": {
       "version": "0.0.1"
@@ -16,8 +16,8 @@
     },
     "crossNavigation": {
       "inbounds": {
-        "zuilibrdraw-display": {
-          "semanticObject": "ZuiAbLibrDraw",
+        "zuidrawapp-display": {
+          "semanticObject": "ZuiAbDraw",
           "action": "display",
           "title": "{{appTitle}}",
           "signature": {
@@ -46,7 +46,7 @@
   },
   "sap.fiori": {
     "registrationIds": [],
-    "archeType": "reusecomponent"
+    "archeType": "transactional"
   },
   "sap.ui5": {
     "flexEnabled": false,
@@ -55,7 +55,8 @@
       "libs": {
         "sap.m": {},
         "sap.ui.core": {},
-        "sap.suite.ui.generic.template": {}
+        "sap.uxap": {},
+        "zab.be.resa.draw": {}
       }
     },
     "contentDensities": {
@@ -66,7 +67,7 @@
       "i18n": {
         "type": "sap.ui.model.resource.ResourceModel",
         "settings": {
-          "bundleName": "zab.be.resa.zuilibrdraw.i18n.i18n",
+          "bundleName": "zab.be.resa.zuidrawapp.i18n.i18n",
           "supportedLocales": [
             ""
           ],
@@ -74,18 +75,11 @@
         }
       }
     },
-    "resources": {
-      "css": [
-        {
-          "uri": "css/style.css"
-        }
-      ]
-    },
     "rootView": {
-      "viewName": "zab.be.resa.zuilibrdraw.view.Draw",
+      "viewName": "zab.be.resa.zuidrawapp.view.Main",
       "type": "XML",
       "async": true,
-      "id": "Draw"
+      "id": "Main"
     }
   }
 }
