@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "es2022",
+    "moduleResolution": "node",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "skipLibCheck": true,
+    "allowJs": false,
+    "strict": true,
+    "strictNullChecks": false,
+    "noImplicitAny": true,
+    "noEmit": true,
+    "rootDir": "webapp",
+    "baseUrl": "./",
+    "paths": {
+      "zab/be/resa/zuilibrdraw/*": [
+        "./webapp/*"
+      ]
+    },
+    "typeRoots": [
+      "./node_modules/@types",
+      "./node_modules/@sapui5"
+    ],
+    "types": [
+      "ts-types-esm"
+    ]
+  },
+  "include": [
+    "webapp/**/*.ts"
+  ]
+}

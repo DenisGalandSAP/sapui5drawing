@@ -81,35 +81,6 @@
         }
       ]
     },
-    "routing": {
-      "config": {
-        "routerClass": "sap.m.routing.Router",
-        "viewType": "XML",
-        "async": true,
-        "viewPath": "zab.be.resa.zuilibrdraw.view",
-        "controlAggregation": "pages",
-        "controlId": "app",
-        "clearControlAggregation": false
-      },
-      "routes": [
-        {
-          "name": "RouteDraw",
-          "pattern": ":?query:",
-          "target": [
-            "TargetDraw"
-          ]
-        }
-      ],
-      "targets": {
-        "TargetDraw": {
-          "viewType": "XML",
-          "transition": "slide",
-          "clearControlAggregation": false,
-          "viewId": "Draw",
-          "viewName": "Draw"
-        }
-      }
-    },
     "rootView": {
       "viewName": "zab.be.resa.zuilibrdraw.view.Draw",
       "type": "XML",

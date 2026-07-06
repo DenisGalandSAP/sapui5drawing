@@ -10,28 +10,9 @@
         }
     </style>
 
-    <script type="text/javascript">
-        window["sap-ushell-config"] = {
-            defaultRenderer: "fiori2",
-            applications: {
-                "ZuiAbLibrDraw-display": {
-                    title: "Drawing Board",
-                    description: "AB - Drawing reuse component",
-                    additionalInformation: "SAPUI5.Component=zab.be.resa.zuilibrdraw",
-                    applicationType: "URL",
-                    url: "../",
-                    navigationMode: "embedded"
-                }
-            }
-        };
-    </script>
-
-    <script src="../test-resources/sap/ushell/bootstrap/sandbox.js"
-        id="sap-ushell-bootstrap"></script>
-
     <script id="sap-ui-bootstrap"
         src="../resources/sap-ui-core.js"
-        data-sap-ui-libs="sap.m, sap.ushell, sap.ui.core, sap.suite.ui.generic.template"
+        data-sap-ui-libs="sap.m, sap.ui.core, sap.uxap"
         data-sap-ui-compatVersion="edge"
         data-sap-ui-theme="sap_fiori_3"
         data-sap-ui-frameOptions="allow"
@@ -44,7 +25,21 @@
 
     <script>
         sap.ui.getCore().attachInit(function () {
-            sap.ushell.Container.createRenderer().placeAt("content");
+            sap.ui.require([
+                "sap/ui/core/mvc/XMLView",
+                "sap/ui/model/resource/ResourceModel"
+            ], function (XMLView, ResourceModel) {
+                var oI18nModel = new ResourceModel({
+                    bundleName: "zab.be.resa.zuilibrdraw.i18n.i18n"
+                });
+
+                XMLView.create({
+                    viewName: "zab.be.resa.zuilibrdraw.view.Main"
+                }).then(function (oView) {
+                    oView.setModel(oI18nModel, "i18n");
+                    oView.placeAt("content");
+                });
+            });
         });
     </script>
 </head>
