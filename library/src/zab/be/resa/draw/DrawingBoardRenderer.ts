@@ -50,6 +50,24 @@ const DrawingBoardRenderer = {
 		oRm.openEnd();
 		oRm.close("canvas");
 
+		// Invite affichée en mode photo tant qu'aucune image n'a été ajoutée.
+		// Masquée par défaut ; DrawingBoard#_updatePhotoHint pilote sa visibilité.
+		oRm.openStart("div");
+		oRm.class("db-photo-hint");
+		oRm.style("display", "none");
+		oRm.style("position", "absolute");
+		oRm.style("inset", "0");
+		oRm.style("align-items", "center");
+		oRm.style("justify-content", "center");
+		oRm.style("text-align", "center");
+		oRm.style("padding", "1rem");
+		oRm.style("color", "#ffffff");
+		oRm.style("font-size", "1rem");
+		oRm.style("pointer-events", "none");
+		oRm.openEnd();
+		oRm.text(oControl.getPhotoHintText());
+		oRm.close("div");
+
 		oRm.close("div");
 
 		oRm.close("div");

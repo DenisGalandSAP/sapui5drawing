@@ -51,6 +51,11 @@ Because the library is served statically, it must be built first — the `start`
 run `npm run build:lib` automatically. Re-run `npm run build:lib` after changing the
 library.
 
+> **Using the `DrawingBoard` control in your own SAPUI5 app?** See
+> [`library/README.md`](library/README.md) for the consumer guide: wiring the
+> library into an app, the control's API, the toolbar features, and the PNG
+> save/reopen format (including how to read the embedded coordinates).
+
 ### Starting the app
 
 ```

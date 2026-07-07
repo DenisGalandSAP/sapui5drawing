@@ -13,7 +13,50 @@ import SegmentedButton from "sap/m/SegmentedButton";
 import SegmentedButtonItem from "sap/m/SegmentedButtonItem";
 import Item from "sap/ui/core/Item";
 import MessageToast from "sap/m/MessageToast";
+import Dialog from "sap/m/Dialog";
+import Input from "sap/m/Input";
+import ColorPalettePopover from "sap/m/ColorPalettePopover";
+import HTML from "sap/ui/core/HTML";
 import DrawingBoardRenderer from "./DrawingBoardRenderer";
+import { insertTextChunk, readTextChunk, encodeUtf8ToBase64, decodeBase64ToUtf8 } from "./PngMetadata";
+
+type DrawMode = "draw" | "photo";
+
+/** Mot-clé du chunk PNG portant le projet ré-éditable. */
+const PROJECT_CHUNK_KEYWORD = "zabDrawProject";
+
+interface ProjectImage {
+	dataUrl: string;
+	width: number;
+	height: number;
+}
+
+/**
+ * Projet de dessin sérialisable : image d'origine + lignes vectorielles.
+ * Les coordonnées des formes sont exprimées dans l'espace indiqué par
+ * `coordinateSpace` : « image-pixels » (pixels de la photo) en mode photo,
+ * « world » (coordonnées canevas) à défaut.
+ */
+interface DrawProject {
+	type: "zab.be.resa.draw.project";
+	version: number;
+	mode: DrawMode;
+	strokeColor: string;
+	coordinateSpace: "image-pixels" | "world";
+	width: number;
+	height: number;
+	image: ProjectImage | null;
+	shapes: Shape[];
+	shapeIdCounter: number;
+	groupIdCounter: number;
+}
+
+interface Rect {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+}
 
 interface Point {
 	x: number;
@@ -55,7 +98,15 @@ interface CircleShape extends ShapeBase {
 	r: number;
 }
 
-type Shape = PenShape | LineShape | RectShape | CircleShape;
+interface TextShape extends ShapeBase {
+	type: "text";
+	x: number;
+	y: number;
+	text: string;
+	fontSize: number;
+}
+
+type Shape = PenShape | LineShape | RectShape | CircleShape | TextShape;
 
 interface Segment {
 	x1: number;
@@ -72,6 +123,8 @@ interface Bounds {
 }
 
 interface DrawState {
+	mode: DrawMode;
+	strokeColor: string;
 	tool: string;
 	zoom: number;
 	panX: number;
@@ -93,6 +146,9 @@ interface BoundHandlers {
 	onWheel: (oEvent: WheelEvent) => void;
 	onResize: () => void;
 	onKeyDown: (oEvent: KeyboardEvent) => void;
+	onDragOver: (oEvent: DragEvent) => void;
+	onDragLeave: (oEvent: DragEvent) => void;
+	onDrop: (oEvent: DragEvent) => void;
 }
 
 /**
@@ -131,6 +187,11 @@ export default class DrawingBoard extends Control {
 	private _state!: DrawState;
 	private _shapeIdCounter!: number;
 	private _groupIdCounter!: number;
+	/** Historique d'annulation : instantanés complets de la liste des formes. */
+	private _undoStack!: Shape[][];
+	/** Vrai tant qu'un déplacement n'a pas encore enregistré son instantané. */
+	private _pendingDragHistory!: boolean;
+	/** Pile de rétablissement : instantanés complets de la liste des formes. */
 	private _redoStack!: Shape[][];
 	private _boundCanvas!: HTMLCanvasElement | null;
 	private _windowBound!: boolean;
@@ -143,9 +204,26 @@ export default class DrawingBoard extends Control {
 	private _bundle!: ResourceBundle;
 
 	private _toolSelector!: SegmentedButton;
+	private _modeSelector!: SegmentedButton;
 	private _presetSelect!: Select;
 	private _zoomSlider!: Slider;
+	private _colorButton!: Button;
+	private _colorPopover!: ColorPalettePopover | null;
+	private _cameraSelect!: Select;
 	private _interactiveControls!: Array<{ setEnabled(b: boolean): unknown }>;
+	/** Contrôles liés au dessin, (dés)activés selon le mode et la présence d'une photo. */
+	private _drawingControls!: Array<{ setVisible(b: boolean): unknown; setEnabled(b: boolean): unknown }>;
+	/** Contrôles liés à la photo (téléversement / caméra), visibles en mode photo. */
+	private _photoControls!: Array<{ setVisible(b: boolean): unknown; setEnabled(b: boolean): unknown }>;
+
+	private _bgImage!: HTMLImageElement | null;
+	private _bgRect!: Rect | null;
+	private _fileInput!: HTMLInputElement | null;
+	private _projectInput!: HTMLInputElement | null;
+	private _cameraDialog!: Dialog | null;
+	private _cameraStream!: MediaStream | null;
+	private _boundFileChange!: () => void;
+	private _boundProjectChange!: () => void;
 
 	/* =========================================================== */
 	/* méthodes de cycle de vie                                    */
@@ -153,6 +231,8 @@ export default class DrawingBoard extends Control {
 
 	public init(): void {
 		this._state = {
+			mode: "draw",
+			strokeColor: "#0d47a1",
 			tool: "pen",
 			zoom: 1,
 			panX: 0,
@@ -169,7 +249,9 @@ export default class DrawingBoard extends Control {
 
 		this._shapeIdCounter = 1;
 		this._groupIdCounter = 1;
+		this._undoStack = [];
 		this._redoStack = [];
+		this._pendingDragHistory = false;
 		this._boundCanvas = null;
 		this._windowBound = false;
 		this._retrySetupTimer = null;
@@ -177,18 +259,33 @@ export default class DrawingBoard extends Control {
 		this._container = null;
 		this._canvas = null;
 		this._ctx = null;
+		this._colorPopover = null;
+		this._bgImage = null;
+		this._bgRect = null;
+		this._fileInput = null;
+		this._projectInput = null;
+		this._cameraDialog = null;
+		this._cameraStream = null;
+		this._boundFileChange = this._onFileInputChange.bind(this);
+		this._boundProjectChange = this._onProjectInputChange.bind(this);
 		this._boundHandlers = {
 			onPointerDown: this._onPointerDown.bind(this),
 			onPointerMove: this._onPointerMove.bind(this),
 			onPointerUp: this._onPointerUp.bind(this),
 			onWheel: this._onWheel.bind(this),
 			onResize: this._resizeCanvas.bind(this),
-			onKeyDown: this._onKeyDown.bind(this)
+			onKeyDown: this._onKeyDown.bind(this),
+			onDragOver: this._onDragOver.bind(this),
+			onDragLeave: this._onDragLeave.bind(this),
+			onDrop: this._onDrop.bind(this)
 		};
 
 		this._bundle = Core.getLibraryResourceBundle("zab.be.resa.draw") as ResourceBundle;
+		this._createFileInput();
+		this._createProjectInput();
 		this._buildToolbar();
 		this._applyEditable();
+		this._applyMode();
 	}
 
 	public onAfterRendering(): void {
@@ -197,6 +294,7 @@ export default class DrawingBoard extends Control {
 			window.clearTimeout(this._retrySetupTimer);
 		}
 		this._retrySetupTimer = window.setTimeout(this._setupCanvas.bind(this), 0);
+		this._updatePhotoHint();
 	}
 
 	public exit(): void {
@@ -215,6 +313,29 @@ export default class DrawingBoard extends Control {
 			window.removeEventListener("keydown", this._boundHandlers.onKeyDown);
 			this._windowBound = false;
 		}
+		this._stopCameraStream();
+		if (this._cameraDialog) {
+			this._cameraDialog.destroy();
+			this._cameraDialog = null;
+		}
+		if (this._colorPopover) {
+			this._colorPopover.destroy();
+			this._colorPopover = null;
+		}
+		if (this._fileInput) {
+			this._fileInput.removeEventListener("change", this._boundFileChange);
+			if (this._fileInput.parentNode) {
+				this._fileInput.parentNode.removeChild(this._fileInput);
+			}
+			this._fileInput = null;
+		}
+		if (this._projectInput) {
+			this._projectInput.removeEventListener("change", this._boundProjectChange);
+			if (this._projectInput.parentNode) {
+				this._projectInput.parentNode.removeChild(this._projectInput);
+			}
+			this._projectInput = null;
+		}
 	}
 
 	/**
@@ -223,6 +344,7 @@ export default class DrawingBoard extends Control {
 	public setEditable(bEditable: boolean): this {
 		this.setProperty("editable", bEditable, true);
 		this._applyEditable();
+		this._applyMode();
 		return this;
 	}
 
@@ -234,35 +356,49 @@ export default class DrawingBoard extends Control {
 		return this._bundle.getText(sTextId) ?? sTextId;
 	}
 
+	/** Texte de l'invite « ajouter une photo » (utilisé par le renderer). */
+	public getPhotoHintText(): string {
+		return this._getText("addPhotoFirst");
+	}
+
 	private _buildToolbar(): void {
+		// Bascule de mode : dessin libre ou photo à annoter.
+		this._modeSelector = new SegmentedButton({
+			selectedKey: "draw",
+			selectionChange: this._onModeChange.bind(this),
+			items: [
+				new SegmentedButtonItem({ key: "draw", icon: "sap-icon://grid", tooltip: this._getText("modeDraw") }),
+				new SegmentedButtonItem({ key: "photo", icon: "sap-icon://picture", tooltip: this._getText("modePhoto") })
+			]
+		});
+
 		this._toolSelector = new SegmentedButton({
 			selectedKey: "pen",
 			selectionChange: this._onToolChange.bind(this),
 			items: [
-				new SegmentedButtonItem({ key: "pen", text: this._getText("toolPen") }),
-				new SegmentedButtonItem({ key: "line", text: this._getText("toolLine") }),
-				new SegmentedButtonItem({ key: "rect", text: this._getText("toolRect") }),
-				new SegmentedButtonItem({ key: "circle", text: this._getText("toolCircle") }),
-				new SegmentedButtonItem({ key: "select", text: this._getText("toolSelect") }),
-				new SegmentedButtonItem({ key: "pan", text: this._getText("toolPan") })
+				new SegmentedButtonItem({ key: "pen", icon: "sap-icon://edit", tooltip: this._getText("toolPen") }),
+				new SegmentedButtonItem({ key: "line", icon: "sap-icon://border", tooltip: this._getText("toolLine") }),
+				new SegmentedButtonItem({ key: "rect", icon: "sap-icon://draw-rectangle", tooltip: this._getText("toolRect") }),
+				new SegmentedButtonItem({ key: "circle", icon: "sap-icon://circle-task-2", tooltip: this._getText("toolCircle") }),
+				new SegmentedButtonItem({ key: "select", icon: "sap-icon://touch", tooltip: this._getText("toolSelect") }),
+				new SegmentedButtonItem({ key: "pan", icon: "sap-icon://move", tooltip: this._getText("toolPan") })
 			]
 		});
 
 		this._presetSelect = new Select({
-			width: "11rem",
-			selectedKey: "house",
+			width: "9rem",
+			selectedKey: "route",
 			items: [
-				new Item({ key: "house", text: this._getText("presetHouse") }),
+				new Item({ key: "route", text: this._getText("presetRoute") }),
 				new Item({ key: "car", text: this._getText("presetCar") }),
 				new Item({ key: "tree", text: this._getText("presetTree") }),
-				new Item({ key: "sun", text: this._getText("presetSun") }),
-				new Item({ key: "boat", text: this._getText("presetBoat") }),
-				new Item({ key: "cloud", text: this._getText("presetCloud") })
+				new Item({ key: "cross", text: this._getText("presetCross") }),
+				new Item({ key: "house", text: this._getText("presetHouse") })
 			]
 		});
 
 		this._zoomSlider = new Slider({
-			width: "11rem",
+			width: "9rem",
 			min: 0.25,
 			max: 4,
 			step: 0.05,
@@ -270,48 +406,139 @@ export default class DrawingBoard extends Control {
 			liveChange: this._onZoomSliderChange.bind(this)
 		});
 
-		const oInsertButton = new Button({ text: this._getText("insertObject"), press: this._onInsertPresetButtonPress.bind(this) });
-		const oResetButton = new Button({ text: this._getText("resetView"), press: this._onResetView.bind(this) });
-		const oUndoButton = new Button({ text: this._getText("undo"), press: this._onUndo.bind(this) });
-		const oSmallerButton = new Button({ text: this._getText("decreaseSize"), press: this._onSmallerButtonPress.bind(this) });
-		const oLargerButton = new Button({ text: this._getText("increaseSize"), press: this._onLargerButtonPress.bind(this) });
-		const oClearButton = new Button({ text: this._getText("clear"), type: "Reject", press: this._onClear.bind(this) });
-		const oDownloadButton = new Button({ text: this._getText("downloadJpg"), type: "Emphasized", press: this._onDownloadJpg.bind(this) });
+		const oUploadButton = new Button({ icon: "sap-icon://upload", tooltip: this._getText("uploadPhoto"), press: this._onUploadButtonPress.bind(this) });
+		const oCameraButton = new Button({ icon: "sap-icon://camera", tooltip: this._getText("useCamera"), press: this._onCameraButtonPress.bind(this) });
+		this._colorButton = new Button({ icon: "sap-icon://palette", tooltip: this._getText("pickColor"), press: this._openColorPopover.bind(this) });
+		const oInsertButton = new Button({ icon: "sap-icon://add", tooltip: this._getText("insertObject"), press: this._onInsertPresetButtonPress.bind(this) });
+		const oTextButton = new Button({ icon: "sap-icon://text", tooltip: this._getText("insertText"), press: this._onInsertTextButtonPress.bind(this) });
+		const oResetButton = new Button({ icon: "sap-icon://restart", tooltip: this._getText("resetView"), press: this._onResetView.bind(this) });
+		const oUndoButton = new Button({ icon: "sap-icon://undo", tooltip: this._getText("undo"), press: this._onUndo.bind(this) });
+		const oRedoButton = new Button({ icon: "sap-icon://redo", tooltip: this._getText("redo"), press: this._onRedo.bind(this) });
+		const oSmallerButton = new Button({ icon: "sap-icon://exit-full-screen", tooltip: this._getText("decreaseSize"), press: this._onSmallerButtonPress.bind(this) });
+		const oLargerButton = new Button({ icon: "sap-icon://full-screen", tooltip: this._getText("increaseSize"), press: this._onLargerButtonPress.bind(this) });
+		const oRotateLeftButton = new Button({ icon: "sap-icon://response", tooltip: this._getText("rotateLeft"), press: this._onRotateLeftPress.bind(this) });
+		const oRotateRightButton = new Button({ icon: "sap-icon://shortcut", tooltip: this._getText("rotateRight"), press: this._onRotateRightPress.bind(this) });
+		const oDeleteButton = new Button({ icon: "sap-icon://delete", tooltip: this._getText("deleteSelection"), type: "Reject", press: this._onDeleteSelection.bind(this) });
+		const oClearButton = new Button({ icon: "sap-icon://eraser", tooltip: this._getText("clear"), type: "Reject", press: this._onClear.bind(this) });
+		const oOpenButton = new Button({ icon: "sap-icon://open-folder", tooltip: this._getText("openProject"), press: this._onOpenProjectButtonPress.bind(this) });
+		const oDownloadButton = new Button({ icon: "sap-icon://download", tooltip: this._getText("downloadProject"), type: "Emphasized", press: this._onDownloadProject.bind(this) });
 
 		const oToolbar = new OverflowToolbar({
 			content: [
 				new Title({ text: this._getText("toolsTitle") }),
+				this._modeSelector,
+				new ToolbarSeparator(),
+				oUploadButton,
+				oCameraButton,
 				this._toolSelector,
+				this._colorButton,
 				new ToolbarSeparator(),
 				new Label({ text: this._getText("objectsLabel") }),
 				this._presetSelect,
 				oInsertButton,
+				oTextButton,
 				new ToolbarSeparator(),
 				new Label({ text: this._getText("zoomLabel") }),
 				this._zoomSlider,
 				oResetButton,
 				oUndoButton,
+				oRedoButton,
 				oSmallerButton,
 				oLargerButton,
+				oRotateLeftButton,
+				oRotateRightButton,
+				oDeleteButton,
 				oClearButton,
+				oOpenButton,
 				oDownloadButton
 			]
 		});
 
-		this._interactiveControls = [
+		// Contrôles liés au dessin : (dés)activés selon le mode et la présence d'une photo.
+		this._drawingControls = [
 			this._toolSelector,
+			this._colorButton,
 			this._presetSelect,
-			this._zoomSlider,
 			oInsertButton,
-			oResetButton,
+			oTextButton,
 			oUndoButton,
+			oRedoButton,
 			oSmallerButton,
 			oLargerButton,
+			oRotateLeftButton,
+			oRotateRightButton,
+			oDeleteButton
+		];
+
+		// Contrôles liés à la photo : visibles uniquement en mode photo.
+		this._photoControls = [
+			oUploadButton,
+			oCameraButton
+		];
+
+		this._interactiveControls = [
+			this._modeSelector,
+			this._toolSelector,
+			this._colorButton,
+			this._presetSelect,
+			this._zoomSlider,
+			oUploadButton,
+			oCameraButton,
+			oInsertButton,
+			oTextButton,
+			oResetButton,
+			oUndoButton,
+			oRedoButton,
+			oSmallerButton,
+			oLargerButton,
+			oRotateLeftButton,
+			oRotateRightButton,
+			oDeleteButton,
 			oClearButton,
+			oOpenButton,
 			oDownloadButton
 		];
 
 		this.setAggregation("_toolbar", oToolbar);
+	}
+
+	/**
+	 * Applique la visibilité / l'activation des contrôles selon le mode courant.
+	 * En mode photo, les outils de dessin restent désactivés tant qu'aucune photo
+	 * n'a été ajoutée : l'utilisateur doit d'abord téléverser ou capturer une image.
+	 */
+	private _applyMode(): void {
+		if (!this._modeSelector) {
+			return;
+		}
+		const bPhoto = this._state.mode === "photo";
+		const bEditable = this.getProperty("editable") as boolean;
+
+		this._photoControls.forEach((oControl) => {
+			oControl.setVisible(bPhoto);
+			oControl.setEnabled(bEditable);
+		});
+
+		const bDrawingEnabled = bEditable && (!bPhoto || !!this._bgImage);
+		this._drawingControls.forEach((oControl) => {
+			oControl.setEnabled(bDrawingEnabled);
+		});
+
+		this._updatePhotoHint();
+	}
+
+	/** Affiche/masque l'invite « ajouter une photo » posée par le renderer. */
+	private _updatePhotoHint(): void {
+		const oHost = this.getDomRef();
+		if (!oHost) {
+			return;
+		}
+		const oHint = oHost.querySelector(".db-photo-hint") as HTMLElement | null;
+		if (!oHint) {
+			return;
+		}
+		const bShow = this._state.mode === "photo" && !this._bgImage;
+		oHint.style.display = bShow ? "flex" : "none";
 	}
 
 	private _applyEditable(): void {
@@ -335,6 +562,72 @@ export default class DrawingBoard extends Control {
 		this._render();
 	}
 
+	private _onModeChange(oEvent: Event): void {
+		const oItem = oEvent.getParameter("item") as SegmentedButtonItem;
+		const sMode = oItem.getKey() as DrawMode;
+		this._state.mode = sMode;
+
+		// Chaque changement de mode repart d'une zone vierge : le mode photo commence
+		// vide (aucune photo, aucun dessin) et le mode dessin retrouve son trait bleu.
+		this._resetCanvasState();
+		this._state.strokeColor = sMode === "photo" ? "#ffffff" : "#0d47a1";
+		if (this._colorPopover) {
+			this._colorPopover.setDefaultColor(this._state.strokeColor);
+		}
+
+		this._applyMode();
+		this._render();
+	}
+
+	/** Vide dessins, brouillon, historique et photo de fond. */
+	private _resetCanvasState(): void {
+		this._state.shapes = [];
+		this._undoStack = [];
+		this._redoStack = [];
+		this._state.draft = null;
+		this._state.selectedShapeId = null;
+		this._bgImage = null;
+		this._bgRect = null;
+	}
+
+	private _openColorPopover(): void {
+		if (!this._colorPopover) {
+			this._colorPopover = new ColorPalettePopover({
+				defaultColor: this._state.strokeColor,
+				colorSelect: (oEvent: Event) => {
+					const sValue = oEvent.getParameter("value") as string;
+					if (sValue) {
+						this._state.strokeColor = sValue;
+						// Recolorer la sélection courante (dessins déjà tracés), en plus
+						// de fixer la couleur des prochains tracés.
+						this._applyColorToSelection(sValue);
+					}
+				}
+			});
+			this.addDependent(this._colorPopover);
+		}
+		this._colorPopover.setDefaultColor(this._state.strokeColor);
+		// openBy existe à l'exécution mais manque dans les typings 1.90.
+		(this._colorPopover as unknown as { openBy(oControl: Button): void }).openBy(this._colorButton);
+	}
+
+	/** Applique une couleur de trait à la forme (ou au groupe) sélectionnée. */
+	private _applyColorToSelection(sColor: string): void {
+		const sSelectionId = this._state.selectedShapeId;
+		if (!sSelectionId) {
+			return;
+		}
+		const aTargets = this._getShapesForSelection(sSelectionId);
+		if (aTargets.length === 0) {
+			return;
+		}
+		this._pushHistory();
+		aTargets.forEach((oShape) => {
+			oShape.stroke = sColor;
+		});
+		this._render();
+	}
+
 	private _onZoomSliderChange(oEvent: Event): void {
 		if (!this._canvas) {
 			return;
@@ -355,23 +648,56 @@ export default class DrawingBoard extends Control {
 		this._render();
 	}
 
-	private _onUndo(): void {
-		const aUndoneShapes = this._collectUndoBatchFromTail();
-		if (aUndoneShapes.length === 0) {
+	/**
+	 * Enregistre un instantané de l'état courant AVANT une opération modifiante
+	 * (tracé, insertion, déplacement, redimensionnement, rotation, couleur,
+	 * suppression, effacement). Chaque appel constitue une étape annulable.
+	 */
+	private _pushHistory(): void {
+		this._undoStack.push(this._cloneShapesList(this._state.shapes));
+		// Limiter la profondeur de l'historique pour borner la mémoire.
+		if (this._undoStack.length > 100) {
+			this._undoStack.shift();
+		}
+		// Toute nouvelle opération invalide le chemin de rétablissement.
+		this._redoStack = [];
+	}
+
+	private _cloneShapesList(aShapes: Shape[]): Shape[] {
+		return aShapes.map((oShape) => this._cloneShape(oShape));
+	}
+
+	/** Recale la sélection si la forme sélectionnée n'existe plus. */
+	private _ensureSelectionValid(): void {
+		const sId = this._state.selectedShapeId;
+		if (!sId) {
 			return;
 		}
-		this._redoStack.push(aUndoneShapes);
-		this._state.selectedShapeId = null;
+		const bStillThere = this._state.shapes.some((oShape) => this._isShapeMatchSelection(oShape, sId));
+		if (!bStillThere) {
+			this._state.selectedShapeId = null;
+		}
+	}
+
+	private _onUndo(): void {
+		if (this._undoStack.length === 0) {
+			return;
+		}
+		this._redoStack.push(this._cloneShapesList(this._state.shapes));
+		this._state.shapes = this._undoStack.pop() as Shape[];
+		this._state.draft = null;
+		this._ensureSelectionValid();
 		this._render();
 	}
 
 	private _onRedo(): void {
-		const aRedoShapes = this._redoStack.pop();
-		if (!aRedoShapes || aRedoShapes.length === 0) {
+		if (this._redoStack.length === 0) {
 			return;
 		}
-		this._state.shapes.push.apply(this._state.shapes, aRedoShapes);
-		this._state.selectedShapeId = aRedoShapes[0].groupId || aRedoShapes[0].id;
+		this._undoStack.push(this._cloneShapesList(this._state.shapes));
+		this._state.shapes = this._redoStack.pop() as Shape[];
+		this._state.draft = null;
+		this._ensureSelectionValid();
 		this._render();
 	}
 
@@ -383,12 +709,20 @@ export default class DrawingBoard extends Control {
 		this._scaleSelectedShape(1.1);
 	}
 
+	private _onRotateLeftPress(): void {
+		this._rotateSelectedShape(-Math.PI / 12);
+	}
+
+	private _onRotateRightPress(): void {
+		this._rotateSelectedShape(Math.PI / 12);
+	}
+
 	private _onInsertPresetButtonPress(): void {
 		if (!this._canvas) {
 			return;
 		}
 
-		const sPreset = this._presetSelect.getSelectedKey() || "house";
+		const sPreset = this._presetSelect.getSelectedKey() || "route";
 		const oCenterScreen: Point = {
 			x: this._canvas.clientWidth / 2,
 			y: this._canvas.clientHeight / 2
@@ -396,54 +730,833 @@ export default class DrawingBoard extends Control {
 		const oCenterWorld = this._screenToWorld(oCenterScreen);
 		const sGroupId = "g-" + (this._groupIdCounter++);
 		const aPresetShapes = this._createPresetShapes(sPreset, oCenterWorld, sGroupId);
+		this._pushHistory();
 		this._state.shapes.push.apply(this._state.shapes, aPresetShapes);
-		this._redoStack = [];
 		this._state.selectedShapeId = sGroupId;
 		this._render();
 	}
 
+	/* =========================================================== */
+	/* objet texte (zone de texte)                                 */
+	/* =========================================================== */
+
+	private _onInsertTextButtonPress(): void {
+		this._promptForText("", (sText) => this._insertTextObject(sText));
+	}
+
+	/** Ouvre un dialogue de saisie et invoque le rappel avec le texte non vide. */
+	private _promptForText(sInitial: string, fnConfirm: (sText: string) => void): void {
+		const oInput = new Input({
+			value: sInitial,
+			width: "100%",
+			placeholder: this._getText("textPlaceholder")
+		});
+
+		const oDialog = new Dialog({
+			title: this._getText("textDialogTitle"),
+			contentWidth: "24rem",
+			content: [oInput],
+			beginButton: new Button({
+				text: this._getText("ok"),
+				type: "Emphasized",
+				press: () => {
+					const sValue = (oInput.getValue() || "").trim();
+					oDialog.close();
+					if (sValue) {
+						fnConfirm(sValue);
+					}
+				}
+			}),
+			endButton: new Button({
+				text: this._getText("cancel"),
+				press: () => oDialog.close()
+			}),
+			afterClose: () => oDialog.destroy()
+		});
+
+		this.addDependent(oDialog);
+		oDialog.open();
+	}
+
+	/** Crée et place un objet texte au centre de la vue. */
+	private _insertTextObject(sText: string): void {
+		if (!this._canvas) {
+			return;
+		}
+		const fFontSize = 24;
+		const oCenterScreen: Point = {
+			x: this._canvas.clientWidth / 2,
+			y: this._canvas.clientHeight / 2
+		};
+		const oCenterWorld = this._screenToWorld(oCenterScreen);
+
+		const oShape: TextShape = {
+			id: String(this._shapeIdCounter++),
+			stroke: this._state.strokeColor,
+			lineWidth: 1,
+			type: "text",
+			// Centrer approximativement le texte sur le point central.
+			x: oCenterWorld.x - (sText.length * fFontSize * 0.55) / 2,
+			y: oCenterWorld.y - fFontSize / 2,
+			text: sText,
+			fontSize: fFontSize
+		};
+
+		this._pushHistory();
+		this._state.shapes.push(oShape);
+		this._state.selectedShapeId = oShape.id;
+		this._render();
+	}
+
 	private _onClear(): void {
+		if (this._state.shapes.length === 0) {
+			return;
+		}
+		this._pushHistory();
 		this._state.shapes = [];
-		this._redoStack = [];
 		this._state.draft = null;
 		this._state.selectedShapeId = null;
 		this._render();
 		MessageToast.show(this._getText("canvasCleared"));
 	}
 
-	private _onDownloadJpg(): void {
-		if (!this._canvas) {
+	/** Supprime la forme (ou le groupe) actuellement sélectionnée. */
+	private _onDeleteSelection(): void {
+		const sSelectionId = this._state.selectedShapeId;
+		if (!sSelectionId) {
+			this._showSelectObjectMessage();
 			return;
 		}
 
-		const oCanvas = this._canvas;
-		const sName = "dessin-" + new Date().toISOString().replace(/[:.]/g, "-") + ".jpg";
-		const fnDownload = (sUrl: string): void => {
-			const oLink = document.createElement("a");
-			oLink.href = sUrl;
-			oLink.download = sName;
-			document.body.appendChild(oLink);
-			oLink.click();
-			document.body.removeChild(oLink);
+		const aRemaining = this._state.shapes.filter((oShape) => {
+			return !this._isShapeMatchSelection(oShape, sSelectionId);
+		});
+
+		if (aRemaining.length === this._state.shapes.length) {
+			this._showSelectObjectMessage();
+			return;
+		}
+
+		this._pushHistory();
+		this._state.shapes = aRemaining;
+		this._state.selectedShapeId = null;
+		this._render();
+		MessageToast.show(this._getText("selectionDeleted"));
+	}
+
+	/* =========================================================== */
+	/* projet : téléchargement (PNG + coordonnées) / ouverture     */
+	/* =========================================================== */
+
+	/**
+	 * Télécharge un PNG unique : les pixels montrent le rendu composite
+	 * (photo + tracés), et un chunk `tEXt` caché contient le projet ré-éditable
+	 * (image d'origine + lignes en coordonnées pixel de l'image).
+	 */
+	private _onDownloadProject(): void {
+		const oComposite = this._buildCompositeCanvas();
+		if (!oComposite) {
+			return;
+		}
+
+		let sPngDataUrl: string;
+		try {
+			sPngDataUrl = oComposite.toDataURL("image/png");
+		} catch (oError) {
+			// Canevas « tainted » (image d'origine chargée depuis une URL externe
+			// sans CORS) : impossible d'exporter les pixels.
+			MessageToast.show(this._getText("exportTaintError"));
+			return;
+		}
+
+		const oProject = this._serializeProject(oComposite.width, oComposite.height);
+		const sBase64 = encodeUtf8ToBase64(JSON.stringify(oProject));
+
+		let aPngBytes = this._dataUrlToBytes(sPngDataUrl);
+		try {
+			aPngBytes = insertTextChunk(aPngBytes, PROJECT_CHUNK_KEYWORD, sBase64);
+		} catch (oError) {
+			// À défaut, on laisse le PNG sans métadonnées plutôt que d'échouer.
+		}
+
+		// Copie sur un ArrayBuffer concret (les typings récents refusent ArrayBufferLike).
+		const oBlob = new Blob([new Uint8Array(aPngBytes)], { type: "image/png" });
+		const sObjectUrl = URL.createObjectURL(oBlob);
+		this._triggerDownload(sObjectUrl, "dessin-" + this._fileTimestamp() + ".png");
+		window.setTimeout(() => {
+			URL.revokeObjectURL(sObjectUrl);
+		}, 1000);
+		MessageToast.show(this._getText("downloadSuccess"));
+	}
+
+	private _fileTimestamp(): string {
+		return new Date().toISOString().replace(/[:.]/g, "-");
+	}
+
+	private _triggerDownload(sUrl: string, sName: string): void {
+		const oLink = document.createElement("a");
+		oLink.href = sUrl;
+		oLink.download = sName;
+		document.body.appendChild(oLink);
+		oLink.click();
+		document.body.removeChild(oLink);
+	}
+
+	private _dataUrlToBytes(sDataUrl: string): Uint8Array {
+		const iComma = sDataUrl.indexOf(",");
+		const sBinary = atob(sDataUrl.substring(iComma + 1));
+		const aBytes = new Uint8Array(sBinary.length);
+		for (let i = 0; i < sBinary.length; i += 1) {
+			aBytes[i] = sBinary.charCodeAt(i);
+		}
+		return aBytes;
+	}
+
+	/* ---- sérialisation & coordonnées ---- */
+
+	/** Facteur d'échelle : pixels image par unité monde (uniforme). */
+	private _imageScale(): number {
+		if (!this._bgImage || !this._bgRect) {
+			return 1;
+		}
+		return this._bgImage.naturalWidth / this._bgRect.w;
+	}
+
+	private _worldToImagePoint(oPoint: Point): Point {
+		const oRect = this._bgRect as Rect;
+		const oImg = this._bgImage as HTMLImageElement;
+		return {
+			x: (oPoint.x - oRect.x) / oRect.w * oImg.naturalWidth,
+			y: (oPoint.y - oRect.y) / oRect.h * oImg.naturalHeight
+		};
+	}
+
+	private _imageToWorldPoint(oPoint: Point): Point {
+		const oRect = this._bgRect as Rect;
+		const oImg = this._bgImage as HTMLImageElement;
+		return {
+			x: oRect.x + (oPoint.x / oImg.naturalWidth) * oRect.w,
+			y: oRect.y + (oPoint.y / oImg.naturalHeight) * oRect.h
+		};
+	}
+
+	/** Convertit une forme entre l'espace monde et l'espace pixel de l'image. */
+	private _convertShape(oShape: Shape, bToImage: boolean): Shape {
+		const fScale = bToImage ? this._imageScale() : 1 / this._imageScale();
+		const fnPoint = bToImage ? this._worldToImagePoint.bind(this) : this._imageToWorldPoint.bind(this);
+		const oBase = {
+			id: oShape.id,
+			stroke: oShape.stroke,
+			lineWidth: (oShape.lineWidth || 2) * fScale,
+			groupId: oShape.groupId
 		};
 
-		if (oCanvas.toBlob) {
-			oCanvas.toBlob((oBlob: Blob | null) => {
-				if (!oBlob) {
-					return;
-				}
-				const sObjectUrl = URL.createObjectURL(oBlob);
-				fnDownload(sObjectUrl);
-				window.setTimeout(() => {
-					URL.revokeObjectURL(sObjectUrl);
-				}, 1000);
-				MessageToast.show(this._getText("downloadSuccess"));
-			}, "image/jpeg", 0.92);
+		if (oShape.type === "pen") {
+			return { ...oBase, type: "pen", points: oShape.points.map((oPt) => fnPoint(oPt)) };
+		}
+		if (oShape.type === "circle") {
+			const oCenter = fnPoint({ x: oShape.cx, y: oShape.cy });
+			return { ...oBase, type: "circle", cx: oCenter.x, cy: oCenter.y, r: oShape.r * fScale };
+		}
+		if (oShape.type === "text") {
+			const oPos = fnPoint({ x: oShape.x, y: oShape.y });
+			return { ...oBase, type: "text", x: oPos.x, y: oPos.y, text: oShape.text, fontSize: oShape.fontSize * fScale };
+		}
+		// line & rect partagent x1/y1/x2/y2.
+		const oP1 = fnPoint({ x: oShape.x1, y: oShape.y1 });
+		const oP2 = fnPoint({ x: oShape.x2, y: oShape.y2 });
+		return { ...oBase, type: oShape.type, x1: oP1.x, y1: oP1.y, x2: oP2.x, y2: oP2.y };
+	}
+
+	private _cloneShape(oShape: Shape): Shape {
+		return JSON.parse(JSON.stringify(oShape)) as Shape;
+	}
+
+	/** Construit l'objet projet sérialisable pour le PNG. */
+	private _serializeProject(iWidth: number, iHeight: number): DrawProject {
+		const bHasImage = !!(this._bgImage && this._bgRect);
+		const aShapes = this._state.shapes.map((oShape) => {
+			return bHasImage ? this._convertShape(oShape, true) : this._cloneShape(oShape);
+		});
+
+		let oImage: ProjectImage | null = null;
+		if (bHasImage) {
+			const oImg = this._bgImage as HTMLImageElement;
+			oImage = {
+				dataUrl: this._imageToDataUrl(oImg),
+				width: oImg.naturalWidth,
+				height: oImg.naturalHeight
+			};
+		}
+
+		return {
+			type: "zab.be.resa.draw.project",
+			version: 1,
+			mode: this._state.mode,
+			strokeColor: this._state.strokeColor,
+			coordinateSpace: bHasImage ? "image-pixels" : "world",
+			width: iWidth,
+			height: iHeight,
+			image: oImage,
+			shapes: aShapes,
+			shapeIdCounter: this._shapeIdCounter,
+			groupIdCounter: this._groupIdCounter
+		};
+	}
+
+	/** Renvoie une Data URL de l'image (déjà une Data URL, ou re-rendue). */
+	private _imageToDataUrl(oImg: HTMLImageElement): string {
+		if (oImg.src.indexOf("data:") === 0) {
+			return oImg.src;
+		}
+		try {
+			const oCanvas = document.createElement("canvas");
+			oCanvas.width = oImg.naturalWidth;
+			oCanvas.height = oImg.naturalHeight;
+			const oCtx = oCanvas.getContext("2d");
+			if (oCtx) {
+				oCtx.drawImage(oImg, 0, 0);
+				return oCanvas.toDataURL("image/png");
+			}
+		} catch (oError) {
+			// Image externe « tainted » : on retombe sur l'URL d'origine.
+		}
+		return oImg.src;
+	}
+
+	/* ---- composite ---- */
+
+	/**
+	 * Rend un canevas composite hors-écran : photo à sa résolution native +
+	 * tracés (mode photo), ou tracés sur fond blanc en coordonnées monde à défaut.
+	 */
+	private _buildCompositeCanvas(): HTMLCanvasElement | null {
+		if (this._bgImage && this._bgRect) {
+			const iW = this._bgImage.naturalWidth;
+			const iH = this._bgImage.naturalHeight;
+			const oCanvas = document.createElement("canvas");
+			oCanvas.width = iW;
+			oCanvas.height = iH;
+			const oCtx = oCanvas.getContext("2d");
+			if (!oCtx) {
+				return null;
+			}
+			oCtx.drawImage(this._bgImage, 0, 0, iW, iH);
+			this._state.shapes.forEach((oShape) => {
+				this._paintShape(oCtx, this._convertShape(oShape, true));
+			});
+			return oCanvas;
+		}
+
+		const oRect = this._container ? this._container.getBoundingClientRect() : null;
+		const iW = oRect ? Math.max(1, Math.floor(oRect.width)) : 800;
+		const iH = oRect ? Math.max(1, Math.floor(oRect.height)) : 600;
+		const oCanvas = document.createElement("canvas");
+		oCanvas.width = iW;
+		oCanvas.height = iH;
+		const oCtx = oCanvas.getContext("2d");
+		if (!oCtx) {
+			return null;
+		}
+		oCtx.fillStyle = "#ffffff";
+		oCtx.fillRect(0, 0, iW, iH);
+		this._state.shapes.forEach((oShape) => {
+			this._paintShape(oCtx, oShape);
+		});
+		return oCanvas;
+	}
+
+	/** Peint une forme sur un contexte donné, sans zoom (échelle 1:1). */
+	private _paintShape(oCtx: CanvasRenderingContext2D, oShape: Shape): void {
+		oCtx.save();
+		oCtx.strokeStyle = oShape.stroke;
+		oCtx.lineWidth = oShape.lineWidth || 2;
+		oCtx.lineJoin = "round";
+		oCtx.lineCap = "round";
+
+		if (oShape.type === "line") {
+			oCtx.beginPath();
+			oCtx.moveTo(oShape.x1, oShape.y1);
+			oCtx.lineTo(oShape.x2, oShape.y2);
+			oCtx.stroke();
+		} else if (oShape.type === "rect") {
+			oCtx.strokeRect(oShape.x1, oShape.y1, oShape.x2 - oShape.x1, oShape.y2 - oShape.y1);
+		} else if (oShape.type === "circle") {
+			oCtx.beginPath();
+			oCtx.arc(oShape.cx, oShape.cy, oShape.r, 0, Math.PI * 2);
+			oCtx.stroke();
+		} else if (oShape.type === "pen" && oShape.points.length > 1) {
+			oCtx.beginPath();
+			oCtx.moveTo(oShape.points[0].x, oShape.points[0].y);
+			for (let i = 1; i < oShape.points.length; i += 1) {
+				oCtx.lineTo(oShape.points[i].x, oShape.points[i].y);
+			}
+			oCtx.stroke();
+		} else if (oShape.type === "text") {
+			oCtx.fillStyle = oShape.stroke;
+			oCtx.font = oShape.fontSize + "px sans-serif";
+			oCtx.textBaseline = "top";
+			oCtx.fillText(oShape.text, oShape.x, oShape.y);
+		}
+		oCtx.restore();
+	}
+
+	/* ---- ouverture d'un projet ---- */
+
+	/** Crée l'élément <input type="file"> caché servant à ouvrir un projet. */
+	private _createProjectInput(): void {
+		const oInput = document.createElement("input");
+		oInput.type = "file";
+		oInput.accept = "image/png,application/json,.png,.json";
+		oInput.style.display = "none";
+		oInput.addEventListener("change", this._boundProjectChange);
+		document.body.appendChild(oInput);
+		this._projectInput = oInput;
+	}
+
+	private _onOpenProjectButtonPress(): void {
+		if (!this._projectInput) {
+			return;
+		}
+		this._projectInput.value = "";
+		this._projectInput.click();
+	}
+
+	private _onProjectInputChange(): void {
+		if (!this._projectInput || !this._projectInput.files || this._projectInput.files.length === 0) {
+			return;
+		}
+		const oFile = this._projectInput.files[0];
+		const bJson = oFile.type === "application/json" || /\.json$/i.test(oFile.name);
+
+		if (bJson) {
+			const oReader = new FileReader();
+			oReader.onload = () => {
+				this._parseAndLoadProjectJson(oReader.result as string);
+			};
+			oReader.onerror = () => MessageToast.show(this._getText("openError"));
+			oReader.readAsText(oFile);
 			return;
 		}
 
-		fnDownload(oCanvas.toDataURL("image/jpeg", 0.92));
-		MessageToast.show(this._getText("downloadSuccess"));
+		// PNG : chercher le chunk projet ; à défaut, charger comme simple image.
+		const oReader = new FileReader();
+		oReader.onload = () => {
+			const aBytes = new Uint8Array(oReader.result as ArrayBuffer);
+			const sBase64 = readTextChunk(aBytes, PROJECT_CHUNK_KEYWORD);
+			if (sBase64) {
+				try {
+					this._parseAndLoadProjectJson(decodeBase64ToUtf8(sBase64));
+					return;
+				} catch (oError) {
+					MessageToast.show(this._getText("openError"));
+					return;
+				}
+			}
+			// Pas de métadonnées : on traite le PNG comme une photo à annoter.
+			this._loadPlainImageAsPhoto(this._dataUrlFromBytes(aBytes, "image/png"));
+		};
+		oReader.onerror = () => MessageToast.show(this._getText("openError"));
+		oReader.readAsArrayBuffer(oFile);
+	}
+
+	private _dataUrlFromBytes(aBytes: Uint8Array, sMime: string): string {
+		let sBinary = "";
+		for (let i = 0; i < aBytes.length; i += 1) {
+			sBinary += String.fromCharCode(aBytes[i]);
+		}
+		return "data:" + sMime + ";base64," + btoa(sBinary);
+	}
+
+	private _parseAndLoadProjectJson(sJson: string): void {
+		let oProject: DrawProject;
+		try {
+			oProject = JSON.parse(sJson) as DrawProject;
+		} catch (oError) {
+			MessageToast.show(this._getText("openError"));
+			return;
+		}
+		if (!oProject || oProject.type !== "zab.be.resa.draw.project") {
+			MessageToast.show(this._getText("openInvalid"));
+			return;
+		}
+		this._loadProject(oProject);
+	}
+
+	/** Charge une image simple (sans projet) comme photo à annoter. */
+	private _loadPlainImageAsPhoto(sDataUrl: string): void {
+		this._state.mode = "photo";
+		this._modeSelector.setSelectedKey("photo");
+		this._resetCanvasState();
+		this._state.strokeColor = "#ffffff";
+		this._resetView();
+		this._loadImageFromUrl(sDataUrl);
+	}
+
+	/** Restaure l'état complet à partir d'un projet et repeint. */
+	private _loadProject(oProject: DrawProject): void {
+		this._state.mode = oProject.mode === "photo" ? "photo" : "draw";
+		this._modeSelector.setSelectedKey(this._state.mode);
+		this._state.strokeColor = oProject.strokeColor || (this._state.mode === "photo" ? "#ffffff" : "#0d47a1");
+		this._shapeIdCounter = oProject.shapeIdCounter && oProject.shapeIdCounter > 0 ? oProject.shapeIdCounter : 1;
+		this._groupIdCounter = oProject.groupIdCounter && oProject.groupIdCounter > 0 ? oProject.groupIdCounter : 1;
+		this._undoStack = [];
+		this._redoStack = [];
+		this._state.draft = null;
+		this._state.selectedShapeId = null;
+		this._resetView();
+
+		const aStoredShapes = Array.isArray(oProject.shapes) ? oProject.shapes : [];
+
+		if (oProject.image && oProject.image.dataUrl) {
+			const oImg = new Image();
+			oImg.onload = () => {
+				this._bgImage = oImg;
+				this._bgRect = this._computeBackgroundRect(oImg);
+				this._state.shapes = oProject.coordinateSpace === "image-pixels"
+					? aStoredShapes.map((oShape) => this._convertShape(oShape, false))
+					: aStoredShapes.map((oShape) => this._cloneShape(oShape));
+				this._applyMode();
+				this._render();
+				MessageToast.show(this._getText("openSuccess"));
+			};
+			oImg.onerror = () => MessageToast.show(this._getText("photoLoadError"));
+			oImg.src = oProject.image.dataUrl;
+			return;
+		}
+
+		this._bgImage = null;
+		this._bgRect = null;
+		this._state.shapes = aStoredShapes.map((oShape) => this._cloneShape(oShape));
+		this._applyMode();
+		this._render();
+		MessageToast.show(this._getText("openSuccess"));
+	}
+
+	/** Réinitialise zoom / translation (utilisé au chargement d'un projet). */
+	private _resetView(): void {
+		this._state.zoom = 1;
+		this._state.panX = 0;
+		this._state.panY = 0;
+		if (this._zoomSlider) {
+			// mOptions requis par les typings 1.90, optionnel à l'exécution.
+			this._zoomSlider.setValue(1, {});
+		}
+	}
+
+	/* =========================================================== */
+	/* acquisition de la photo (téléversement / caméra)            */
+	/* =========================================================== */
+
+	/** Crée l'élément <input type="file"> caché servant au téléversement. */
+	private _createFileInput(): void {
+		const oInput = document.createElement("input");
+		oInput.type = "file";
+		oInput.accept = "image/*";
+		oInput.style.display = "none";
+		oInput.addEventListener("change", this._boundFileChange);
+		document.body.appendChild(oInput);
+		this._fileInput = oInput;
+	}
+
+	private _onUploadButtonPress(): void {
+		if (!this._fileInput) {
+			return;
+		}
+		// Réinitialiser la valeur pour autoriser le re-choix du même fichier.
+		this._fileInput.value = "";
+		this._fileInput.click();
+	}
+
+	private _onFileInputChange(): void {
+		if (!this._fileInput || !this._fileInput.files || this._fileInput.files.length === 0) {
+			return;
+		}
+		this._readFileAsImage(this._fileInput.files[0]);
+	}
+
+	/** Lit un fichier image en Data URL puis l'installe comme fond. */
+	private _readFileAsImage(oFile: File): void {
+		const oReader = new FileReader();
+		oReader.onload = () => {
+			this._loadImageFromUrl(oReader.result as string);
+		};
+		oReader.onerror = () => {
+			MessageToast.show(this._getText("photoLoadError"));
+		};
+		oReader.readAsDataURL(oFile);
+	}
+
+	/* =========================================================== */
+	/* glisser-déposer d'une image (mode photo)                    */
+	/* =========================================================== */
+
+	/** Vrai si un dépôt d'image est actuellement accepté (mode photo + éditable). */
+	private _acceptsImageDrop(): boolean {
+		return this._state.mode === "photo" && (this.getProperty("editable") as boolean);
+	}
+
+	private _onDragOver(oEvent: DragEvent): void {
+		if (!this._acceptsImageDrop()) {
+			return;
+		}
+		oEvent.preventDefault();
+		if (oEvent.dataTransfer) {
+			oEvent.dataTransfer.dropEffect = "copy";
+		}
+		this._setDropHighlight(true);
+	}
+
+	private _onDragLeave(): void {
+		this._setDropHighlight(false);
+	}
+
+	private _onDrop(oEvent: DragEvent): void {
+		if (!this._acceptsImageDrop()) {
+			return;
+		}
+		oEvent.preventDefault();
+		this._setDropHighlight(false);
+
+		const oData = oEvent.dataTransfer;
+		if (!oData) {
+			return;
+		}
+
+		// Priorité aux fichiers déposés (image locale) : ils donnent une Data URL,
+		// sans souci de « canvas taint » à l'export.
+		if (oData.files && oData.files.length > 0) {
+			const oImageFile = Array.from(oData.files).find((oFile) => oFile.type.indexOf("image/") === 0);
+			if (oImageFile) {
+				this._readFileAsImage(oImageFile);
+				return;
+			}
+		}
+
+		// Sinon, tenter une URL déposée (glissée depuis une autre page/onglet).
+		const sUrl = oData.getData("text/uri-list") || oData.getData("text/plain");
+		if (sUrl) {
+			this._loadImageFromUrl(sUrl.trim());
+		}
+	}
+
+	/** Bordure de mise en évidence de la zone de dépôt. */
+	private _setDropHighlight(bActive: boolean): void {
+		if (this._container) {
+			this._container.style.outline = bActive ? "2px dashed #ffffff" : "";
+			this._container.style.outlineOffset = bActive ? "-6px" : "";
+		}
+	}
+
+	private _loadImageFromUrl(sUrl: string): void {
+		const oImg = new Image();
+		oImg.onload = () => {
+			this._setBackgroundImage(oImg);
+		};
+		oImg.onerror = () => {
+			MessageToast.show(this._getText("photoLoadError"));
+		};
+		oImg.src = sUrl;
+	}
+
+	/** Installe l'image comme fond, réactive les outils et repeint. */
+	private _setBackgroundImage(oImg: HTMLImageElement): void {
+		this._bgImage = oImg;
+		this._bgRect = this._computeBackgroundRect(oImg);
+		this._applyMode();
+		this._render();
+	}
+
+	/**
+	 * Calcule le rectangle (en coordonnées monde) où poser la photo pour qu'elle
+	 * remplisse la fenêtre courante en conservant ses proportions, centrée.
+	 */
+	private _computeBackgroundRect(oImg: HTMLImageElement): Rect {
+		const iViewW = this._canvas ? this._canvas.clientWidth : 800;
+		const iViewH = this._canvas ? this._canvas.clientHeight : 600;
+		const fImgRatio = oImg.naturalWidth / oImg.naturalHeight;
+		const fViewRatio = iViewW / iViewH;
+
+		let fW: number;
+		let fH: number;
+		if (fImgRatio > fViewRatio) {
+			fW = iViewW;
+			fH = iViewW / fImgRatio;
+		} else {
+			fH = iViewH;
+			fW = iViewH * fImgRatio;
+		}
+
+		// Centre de la fenêtre exprimé en coordonnées monde (tient compte du zoom/pan).
+		const oCenterWorld = this._screenToWorld({ x: iViewW / 2, y: iViewH / 2 });
+		const fWorldW = fW / this._state.zoom;
+		const fWorldH = fH / this._state.zoom;
+		return {
+			x: oCenterWorld.x - fWorldW / 2,
+			y: oCenterWorld.y - fWorldH / 2,
+			w: fWorldW,
+			h: fWorldH
+		};
+	}
+
+	/* =========================================================== */
+	/* caméra                                                      */
+	/* =========================================================== */
+
+	private _onCameraButtonPress(): void {
+		if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+			MessageToast.show(this._getText("cameraUnsupported"));
+			return;
+		}
+		this._openCameraDialog();
+	}
+
+	private _openCameraDialog(): void {
+		if (!this._cameraDialog) {
+			this._cameraSelect = new Select({
+				width: "100%",
+				tooltip: this._getText("chooseCamera"),
+				change: this._onCameraDeviceChange.bind(this)
+			});
+
+			const oVideoHtml = new HTML({
+				content: "<video class='db-cam-video' autoplay playsinline muted " +
+					"style='width:100%;max-height:60vh;background:#000;border-radius:0.25rem;'></video>"
+			});
+
+			this._cameraDialog = new Dialog({
+				title: this._getText("cameraDialogTitle"),
+				contentWidth: "40rem",
+				horizontalScrolling: false,
+				verticalScrolling: false,
+				content: [this._cameraSelect, oVideoHtml],
+				beginButton: new Button({
+					text: this._getText("capturePhoto"),
+					type: "Emphasized",
+					icon: "sap-icon://camera",
+					press: this._onCapturePhoto.bind(this)
+				}),
+				endButton: new Button({
+					text: this._getText("cancel"),
+					press: () => {
+						if (this._cameraDialog) {
+							this._cameraDialog.close();
+						}
+					}
+				}),
+				afterClose: () => {
+					this._stopCameraStream();
+				}
+			});
+			this.addDependent(this._cameraDialog);
+		}
+
+		this._cameraDialog.open();
+		void this._startCamera();
+	}
+
+	/** Démarre le flux caméra et (re)peuple la liste des périphériques. */
+	private async _startCamera(sDeviceId?: string): Promise<void> {
+		this._stopCameraStream();
+		try {
+			const oConstraints: MediaStreamConstraints = {
+				video: sDeviceId ? { deviceId: { exact: sDeviceId } } : true,
+				audio: false
+			};
+			const oStream = await navigator.mediaDevices.getUserMedia(oConstraints);
+			this._cameraStream = oStream;
+			this._attachStreamToVideo(oStream);
+			await this._populateCameraDevices();
+		} catch (oError) {
+			MessageToast.show(this._getText("cameraError"));
+		}
+	}
+
+	private _attachStreamToVideo(oStream: MediaStream): void {
+		const oVideo = this._getVideoElement();
+		if (oVideo) {
+			oVideo.srcObject = oStream;
+		}
+	}
+
+	private _getVideoElement(): HTMLVideoElement | null {
+		if (!this._cameraDialog) {
+			return null;
+		}
+		const oDom = this._cameraDialog.getDomRef();
+		if (!oDom) {
+			return null;
+		}
+		return oDom.querySelector(".db-cam-video") as HTMLVideoElement | null;
+	}
+
+	/** Liste les caméras disponibles et sélectionne celle du flux courant. */
+	private async _populateCameraDevices(): Promise<void> {
+		if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+			return;
+		}
+		const aDevices = await navigator.mediaDevices.enumerateDevices();
+		const aCameras = aDevices.filter((oDevice) => oDevice.kind === "videoinput");
+
+		this._cameraSelect.removeAllItems();
+		if (aCameras.length === 0) {
+			MessageToast.show(this._getText("noCameraFound"));
+			return;
+		}
+
+		aCameras.forEach((oDevice, iIndex) => {
+			this._cameraSelect.addItem(new Item({
+				key: oDevice.deviceId,
+				text: oDevice.label || (this._getText("cameraLabel") + " " + (iIndex + 1))
+			}));
+		});
+
+		// Refléter le périphérique réellement actif dans la liste.
+		const oTrack = this._cameraStream ? this._cameraStream.getVideoTracks()[0] : null;
+		const sActiveId = oTrack ? oTrack.getSettings().deviceId : undefined;
+		if (sActiveId) {
+			this._cameraSelect.setSelectedKey(sActiveId);
+		}
+	}
+
+	private _onCameraDeviceChange(oEvent: Event): void {
+		const oItem = oEvent.getParameter("selectedItem") as Item | null;
+		if (oItem) {
+			void this._startCamera(oItem.getKey());
+		}
+	}
+
+	private _onCapturePhoto(): void {
+		const oVideo = this._getVideoElement();
+		if (!oVideo || !oVideo.videoWidth) {
+			MessageToast.show(this._getText("cameraError"));
+			return;
+		}
+
+		const oCapture = document.createElement("canvas");
+		oCapture.width = oVideo.videoWidth;
+		oCapture.height = oVideo.videoHeight;
+		const oCtx = oCapture.getContext("2d");
+		if (!oCtx) {
+			return;
+		}
+		oCtx.drawImage(oVideo, 0, 0, oCapture.width, oCapture.height);
+
+		this._loadImageFromUrl(oCapture.toDataURL("image/jpeg", 0.92));
+		if (this._cameraDialog) {
+			this._cameraDialog.close();
+		}
+	}
+
+	private _stopCameraStream(): void {
+		if (this._cameraStream) {
+			this._cameraStream.getTracks().forEach((oTrack) => oTrack.stop());
+			this._cameraStream = null;
+		}
+		const oVideo = this._getVideoElement();
+		if (oVideo) {
+			oVideo.srcObject = null;
+		}
 	}
 
 	/* =========================================================== */
@@ -476,6 +1589,9 @@ export default class DrawingBoard extends Control {
 			this._canvas.addEventListener("pointerup", this._boundHandlers.onPointerUp);
 			this._canvas.addEventListener("pointerleave", this._boundHandlers.onPointerUp);
 			this._canvas.addEventListener("wheel", this._boundHandlers.onWheel, { passive: false });
+			this._canvas.addEventListener("dragover", this._boundHandlers.onDragOver);
+			this._canvas.addEventListener("dragleave", this._boundHandlers.onDragLeave);
+			this._canvas.addEventListener("drop", this._boundHandlers.onDrop);
 			this._boundCanvas = this._canvas;
 		}
 
@@ -512,6 +1628,9 @@ export default class DrawingBoard extends Control {
 		oCanvas.removeEventListener("pointerup", this._boundHandlers.onPointerUp);
 		oCanvas.removeEventListener("pointerleave", this._boundHandlers.onPointerUp);
 		oCanvas.removeEventListener("wheel", this._boundHandlers.onWheel);
+		oCanvas.removeEventListener("dragover", this._boundHandlers.onDragOver);
+		oCanvas.removeEventListener("dragleave", this._boundHandlers.onDragLeave);
+		oCanvas.removeEventListener("drop", this._boundHandlers.onDrop);
 	}
 
 	private _resizeCanvas(): void {
@@ -560,6 +1679,8 @@ export default class DrawingBoard extends Control {
 			if (oHitShape) {
 				this._state.selectedShapeId = oHitShape.groupId || oHitShape.id;
 				this._state.isDraggingSelection = true;
+				// L'instantané sera pris au premier vrai déplacement (pas au simple clic).
+				this._pendingDragHistory = true;
 			} else {
 				this._state.selectedShapeId = null;
 			}
@@ -590,9 +1711,16 @@ export default class DrawingBoard extends Control {
 		if (this._state.isDraggingSelection && this._state.selectedShapeId && this._state.lastWorldPoint) {
 			const fDx = oWorld.x - this._state.lastWorldPoint.x;
 			const fDy = oWorld.y - this._state.lastWorldPoint.y;
-			this._translateSelection(this._state.selectedShapeId, fDx, fDy);
-			this._state.lastWorldPoint = oWorld;
-			this._render();
+			if (fDx !== 0 || fDy !== 0) {
+				// Instantané unique au premier vrai déplacement du glisser.
+				if (this._pendingDragHistory) {
+					this._pushHistory();
+					this._pendingDragHistory = false;
+				}
+				this._translateSelection(this._state.selectedShapeId, fDx, fDy);
+				this._state.lastWorldPoint = oWorld;
+				this._render();
+			}
 			return;
 		}
 
@@ -606,7 +1734,7 @@ export default class DrawingBoard extends Control {
 			const fRx = oWorld.x - this._state.draft.cx;
 			const fRy = oWorld.y - this._state.draft.cy;
 			this._state.draft.r = Math.sqrt(fRx * fRx + fRy * fRy);
-		} else {
+		} else if (this._state.draft.type === "line" || this._state.draft.type === "rect") {
 			this._state.draft.x2 = oWorld.x;
 			this._state.draft.y2 = oWorld.y;
 		}
@@ -624,8 +1752,8 @@ export default class DrawingBoard extends Control {
 
 		if (this._state.isDrawing && this._state.draft) {
 			if (this._isShapeVisible(this._state.draft)) {
+				this._pushHistory();
 				this._state.shapes.push(this._state.draft);
-				this._redoStack = [];
 			}
 		}
 
@@ -633,6 +1761,7 @@ export default class DrawingBoard extends Control {
 		this._state.isDrawing = false;
 		this._state.isDraggingSelection = false;
 		this._state.isPanning = false;
+		this._pendingDragHistory = false;
 		this._state.lastScreenPoint = null;
 		this._state.lastWorldPoint = null;
 		this._render();
@@ -649,6 +1778,13 @@ export default class DrawingBoard extends Control {
 			if (bTyping) {
 				return;
 			}
+		}
+
+		// Suppression de la sélection via Suppr / Retour arrière (sans modificateur).
+		if ((oEvent.key === "Delete" || oEvent.key === "Backspace") && this._state.selectedShapeId) {
+			oEvent.preventDefault();
+			this._onDeleteSelection();
+			return;
 		}
 
 		const bModifier = oEvent.ctrlKey || oEvent.metaKey;
@@ -679,31 +1815,6 @@ export default class DrawingBoard extends Control {
 	/* =========================================================== */
 	/* aides historique / sélection                                */
 	/* =========================================================== */
-
-	private _collectUndoBatchFromTail(): Shape[] {
-		const iLastIndex = this._state.shapes.length - 1;
-		if (iLastIndex < 0) {
-			return [];
-		}
-
-		const oLastShape = this._state.shapes[iLastIndex];
-		const sLastGroupId = oLastShape.groupId;
-		if (!sLastGroupId) {
-			const oSingle = this._state.shapes.pop();
-			return oSingle ? [oSingle] : [];
-		}
-
-		const aBatch: Shape[] = [];
-		while (this._state.shapes.length > 0) {
-			const oTail = this._state.shapes[this._state.shapes.length - 1];
-			if (oTail.groupId !== sLastGroupId) {
-				break;
-			}
-			aBatch.unshift(oTail);
-			this._state.shapes.pop();
-		}
-		return aBatch;
-	}
 
 	private _setZoom(fNewZoom: number, oScreenAnchor?: Point): void {
 		if (!this._canvas) {
@@ -742,7 +1853,7 @@ export default class DrawingBoard extends Control {
 	private _createDraftShape(sTool: string, oWorld: Point): Shape {
 		const oCommon = {
 			id: String(this._shapeIdCounter++),
-			stroke: "#0d47a1",
+			stroke: this._state.strokeColor,
 			lineWidth: 2
 		};
 
@@ -771,7 +1882,11 @@ export default class DrawingBoard extends Control {
 		if (oShape.type === "rect") {
 			return Math.abs(oShape.x2 - oShape.x1) > 2 && Math.abs(oShape.y2 - oShape.y1) > 2;
 		}
-		return oShape.r > 2;
+		if (oShape.type === "circle") {
+			return oShape.r > 2;
+		}
+		// text : toujours visible (inséré, jamais dessiné à main levée).
+		return true;
 	}
 
 	private _translateSelection(sSelectionId: string, fDx: number, fDy: number): void {
@@ -787,6 +1902,12 @@ export default class DrawingBoard extends Control {
 			if (oShape.type === "circle") {
 				oShape.cx += fDx;
 				oShape.cy += fDy;
+				return;
+			}
+
+			if (oShape.type === "text") {
+				oShape.x += fDx;
+				oShape.y += fDy;
 				return;
 			}
 
@@ -809,11 +1930,88 @@ export default class DrawingBoard extends Control {
 			return;
 		}
 
+		this._pushHistory();
 		const oCenter = this._getSelectionCenter(aTargets);
 		aTargets.forEach((oShape) => {
 			this._scaleShapeAroundCenter(oShape, oCenter, fFactor);
 		});
 		this._render();
+	}
+
+	/**
+	 * Fait pivoter la forme (ou le groupe) sélectionnée autour de son centre.
+	 * Un rectangle pivoté devient un polygone fermé (le modèle rectangle est
+	 * aligné aux axes et ne peut représenter une rotation).
+	 */
+	private _rotateSelectedShape(fAngle: number): void {
+		const sSelectionId = this._state.selectedShapeId;
+		if (!sSelectionId) {
+			this._showSelectObjectMessage();
+			return;
+		}
+
+		const aTargets = this._getShapesForSelection(sSelectionId);
+		if (aTargets.length === 0) {
+			this._showSelectObjectMessage();
+			return;
+		}
+
+		this._pushHistory();
+		const oCenter = this._getSelectionCenter(aTargets);
+		this._state.shapes = this._state.shapes.map((oShape) => {
+			return this._isShapeMatchSelection(oShape, sSelectionId)
+				? this._rotateShape(oShape, oCenter, fAngle)
+				: oShape;
+		});
+		this._render();
+	}
+
+	private _rotatePoint(oPoint: Point, oCenter: Point, fAngle: number): Point {
+		const fCos = Math.cos(fAngle);
+		const fSin = Math.sin(fAngle);
+		const fDx = oPoint.x - oCenter.x;
+		const fDy = oPoint.y - oCenter.y;
+		return {
+			x: oCenter.x + fDx * fCos - fDy * fSin,
+			y: oCenter.y + fDx * fSin + fDy * fCos
+		};
+	}
+
+	private _rotateShape(oShape: Shape, oCenter: Point, fAngle: number): Shape {
+		const fnRot = (oPoint: Point): Point => this._rotatePoint(oPoint, oCenter, fAngle);
+		const oBase = {
+			id: oShape.id,
+			stroke: oShape.stroke,
+			lineWidth: oShape.lineWidth,
+			groupId: oShape.groupId
+		};
+
+		if (oShape.type === "pen") {
+			return { ...oBase, type: "pen", points: oShape.points.map(fnRot) };
+		}
+		if (oShape.type === "line") {
+			const oP1 = fnRot({ x: oShape.x1, y: oShape.y1 });
+			const oP2 = fnRot({ x: oShape.x2, y: oShape.y2 });
+			return { ...oBase, type: "line", x1: oP1.x, y1: oP1.y, x2: oP2.x, y2: oP2.y };
+		}
+		if (oShape.type === "circle") {
+			const oPos = fnRot({ x: oShape.cx, y: oShape.cy });
+			return { ...oBase, type: "circle", cx: oPos.x, cy: oPos.y, r: oShape.r };
+		}
+		if (oShape.type === "text") {
+			const oPos = fnRot({ x: oShape.x, y: oShape.y });
+			return { ...oBase, type: "text", x: oPos.x, y: oPos.y, text: oShape.text, fontSize: oShape.fontSize };
+		}
+
+		// rect : convertir les 4 coins pivotés en polygone fermé (crayon).
+		const aCorners = [
+			fnRot({ x: oShape.x1, y: oShape.y1 }),
+			fnRot({ x: oShape.x2, y: oShape.y1 }),
+			fnRot({ x: oShape.x2, y: oShape.y2 }),
+			fnRot({ x: oShape.x1, y: oShape.y2 })
+		];
+		aCorners.push(aCorners[0]);
+		return { ...oBase, type: "pen", points: aCorners };
 	}
 
 	private _getSelectionCenter(aShapes: Shape[]): Point {
@@ -849,6 +2047,16 @@ export default class DrawingBoard extends Control {
 				maxX: oShape.cx + oShape.r,
 				minY: oShape.cy - oShape.r,
 				maxY: oShape.cy + oShape.r
+			};
+		}
+
+		if (oShape.type === "text") {
+			const fWidth = this._textWidth(oShape);
+			return {
+				minX: oShape.x,
+				maxX: oShape.x + fWidth,
+				minY: oShape.y,
+				maxY: oShape.y + oShape.fontSize
 			};
 		}
 
@@ -905,6 +2113,13 @@ export default class DrawingBoard extends Control {
 			return;
 		}
 
+		if (oShape.type === "text") {
+			oShape.x = oCenter.x + (oShape.x - oCenter.x) * fFactor;
+			oShape.y = oCenter.y + (oShape.y - oCenter.y) * fFactor;
+			oShape.fontSize = Math.max(4, oShape.fontSize * fFactor);
+			return;
+		}
+
 		oShape.points = oShape.points.map((oPoint) => {
 			return {
 				x: oCenter.x + (oPoint.x - oCenter.x) * fFactor,
@@ -928,7 +2143,7 @@ export default class DrawingBoard extends Control {
 
 	private _createPresetShapes(sPreset: string, oCenter: Point, sGroupId: string): Shape[] {
 		const oStyle = {
-			stroke: "#0d47a1",
+			stroke: this._state.strokeColor,
 			lineWidth: 2,
 			groupId: sGroupId
 		};
@@ -990,37 +2205,30 @@ export default class DrawingBoard extends Control {
 			];
 		}
 
-		if (sPreset === "sun") {
+		if (sPreset === "route") {
 			return [
-				fnCircle(0, 0, 22),
-				fnLine(0, -42, 0, -28),
-				fnLine(30, -30, 20, -20),
-				fnLine(42, 0, 28, 0),
-				fnLine(30, 30, 20, 20),
-				fnLine(0, 42, 0, 28),
-				fnLine(-30, 30, -20, 20),
-				fnLine(-42, 0, -28, 0),
-				fnLine(-30, -30, -20, -20)
+				// Deux bords de route + ligne centrale discontinue.
+				fnLine(-22, -60, -22, 60),
+				fnLine(22, -60, 22, 60),
+				fnLine(0, -55, 0, -38),
+				fnLine(0, -20, 0, -3),
+				fnLine(0, 14, 0, 31),
+				fnLine(0, 47, 0, 60)
 			];
 		}
 
-		if (sPreset === "boat") {
+		if (sPreset === "cross") {
+			// Croix (X) pour marquer un point d'impact.
 			return [
-				fnLine(-55, 24, 55, 24),
-				fnLine(-45, 24, -25, 42),
-				fnLine(-25, 42, 25, 42),
-				fnLine(25, 42, 45, 24),
-				fnLine(0, 24, 0, -30),
-				fnLine(0, -30, 30, -5),
-				fnLine(0, -5, 30, -5)
+				fnLine(-22, -22, 22, 22),
+				fnLine(-22, 22, 22, -22)
 			];
 		}
 
+		// Défaut : une croix.
 		return [
-			fnCircle(-18, 0, 14),
-			fnCircle(0, -10, 18),
-			fnCircle(20, 0, 14),
-			fnLine(-34, 14, 34, 14)
+			fnLine(-22, -22, 22, 22),
+			fnLine(-22, 22, 22, -22)
 		];
 	}
 
@@ -1066,8 +2274,21 @@ export default class DrawingBoard extends Control {
 					}
 				}
 			}
+
+			if (oShape.type === "text") {
+				const fWidth = this._textWidth(oShape);
+				if (oWorld.x >= oShape.x - fTolerance && oWorld.x <= oShape.x + fWidth + fTolerance &&
+					oWorld.y >= oShape.y - fTolerance && oWorld.y <= oShape.y + oShape.fontSize + fTolerance) {
+					return oShape;
+				}
+			}
 		}
 		return null;
+	}
+
+	/** Largeur approximative d'un texte (sans mesure de contexte). */
+	private _textWidth(oShape: TextShape): number {
+		return (oShape.text.length || 1) * oShape.fontSize * 0.55;
 	}
 
 	/* =========================================================== */
@@ -1082,23 +2303,65 @@ export default class DrawingBoard extends Control {
 		const iWidth = this._canvas.clientWidth;
 		const iHeight = this._canvas.clientHeight;
 		this._ctx.clearRect(0, 0, iWidth, iHeight);
-		this._drawBackgroundGrid(iWidth, iHeight);
+
+		if (this._state.mode === "photo") {
+			// En mode photo, un fond uni remplace la grille : la photo (ou le vide en
+			// attendant qu'on en ajoute une) doit rester lisible.
+			this._ctx.save();
+			this._ctx.fillStyle = "#2b2b2b";
+			this._ctx.fillRect(0, 0, iWidth, iHeight);
+			this._ctx.restore();
+		} else {
+			this._drawBackgroundGrid(iWidth, iHeight);
+		}
 
 		this._ctx.save();
 		this._ctx.translate(this._state.panX, this._state.panY);
 		this._ctx.scale(this._state.zoom, this._state.zoom);
 
+		if (this._bgImage && this._bgRect) {
+			this._ctx.drawImage(this._bgImage, this._bgRect.x, this._bgRect.y, this._bgRect.w, this._bgRect.h);
+		}
+
 		this._state.shapes.forEach((oShape) => {
-			this._drawShape(oShape, this._isShapeMatchSelection(oShape, this._state.selectedShapeId));
+			this._drawShape(oShape);
 		});
+
+		// Cadre de sélection : indiqué par un rectangle en pointillés (et non en
+		// recolorant la forme), afin que sa vraie couleur reste visible même
+		// pendant qu'elle est sélectionnée.
+		this._drawSelectionOverlay();
 
 		if (this._state.draft) {
 			this._ctx.save();
 			this._ctx.globalAlpha = 0.75;
-			this._drawShape(this._state.draft, false);
+			this._drawShape(this._state.draft);
 			this._ctx.restore();
 		}
 
+		this._ctx.restore();
+	}
+
+	private _drawSelectionOverlay(): void {
+		if (!this._ctx || !this._state.selectedShapeId) {
+			return;
+		}
+		const aTargets = this._getShapesForSelection(this._state.selectedShapeId);
+		if (aTargets.length === 0) {
+			return;
+		}
+		const oBounds = this._getShapesBounds(aTargets);
+		const fPad = 6 / this._state.zoom;
+		this._ctx.save();
+		this._ctx.strokeStyle = "#ff6f00";
+		this._ctx.lineWidth = 1.5 / this._state.zoom;
+		this._ctx.setLineDash([6 / this._state.zoom, 4 / this._state.zoom]);
+		this._ctx.strokeRect(
+			oBounds.minX - fPad,
+			oBounds.minY - fPad,
+			(oBounds.maxX - oBounds.minX) + fPad * 2,
+			(oBounds.maxY - oBounds.minY) + fPad * 2
+		);
 		this._ctx.restore();
 	}
 
@@ -1130,12 +2393,12 @@ export default class DrawingBoard extends Control {
 		this._ctx.restore();
 	}
 
-	private _drawShape(oShape: Shape, bSelected: boolean): void {
+	private _drawShape(oShape: Shape): void {
 		if (!this._ctx) {
 			return;
 		}
 		this._ctx.save();
-		this._ctx.strokeStyle = bSelected ? "#ff6f00" : oShape.stroke;
+		this._ctx.strokeStyle = oShape.stroke;
 		this._ctx.lineWidth = (oShape.lineWidth || 2) / this._state.zoom;
 		this._ctx.lineJoin = "round";
 		this._ctx.lineCap = "round";
@@ -1164,6 +2427,13 @@ export default class DrawingBoard extends Control {
 				this._ctx.lineTo(oShape.points[i].x, oShape.points[i].y);
 			}
 			this._ctx.stroke();
+		}
+
+		if (oShape.type === "text") {
+			this._ctx.fillStyle = oShape.stroke;
+			this._ctx.font = oShape.fontSize + "px sans-serif";
+			this._ctx.textBaseline = "top";
+			this._ctx.fillText(oShape.text, oShape.x, oShape.y);
 		}
 
 		this._ctx.restore();

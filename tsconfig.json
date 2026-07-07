@@ -2,12 +2,8 @@
   "compilerOptions": {
     "target": "es2022",
     "module": "es2022",
-    "moduleResolution": "node",
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "moduleResolution": "bun",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
     "allowJs": false,
     "strict": true,
@@ -17,19 +13,10 @@
     "rootDir": "webapp",
     "baseUrl": "./",
     "paths": {
-      "zab/be/resa/zuidrawapp/*": [
-        "./webapp/*"
-      ]
+      "zab/be/resa/zuidrawapp/*": ["./webapp/*"]
     },
-    "typeRoots": [
-      "./node_modules/@types",
-      "./node_modules/@sapui5"
-    ],
-    "types": [
-      "ts-types-esm"
-    ]
+    "typeRoots": ["./node_modules/@types", "./node_modules/@sapui5"],
+    "types": ["ts-types-esm"]
   },
-  "include": [
-    "webapp/**/*.ts"
-  ]
+  "include": ["webapp/**/*.ts"]
 }
