@@ -8,7 +8,7 @@
 |**Library Module**<br>ZUI_AB_LIBR_DRAW — namespace `zab.be.resa.draw`|
 |**Application Title**<br>AB : Draw App|
 |**UI5 Theme**<br>sap_fiori_3|
-|**UI5 Version**<br>1.71.58 (on-premise ECC, runtime 1.71.76)|
+|**UI5 Version**<br>1.142.0 (SAP BTP)|
 |**Enable TypeScript**<br>True|
 
 ## Architecture
