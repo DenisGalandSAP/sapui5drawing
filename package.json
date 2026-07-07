@@ -11,7 +11,7 @@
   "main": "webapp/index.html",
   "devDependencies": {
     "@sap/ux-ui5-tooling": "^1.27.0",
-    "@sapui5/ts-types-esm": "1.90.0",
+    "@sapui5/types": "~1.142.0",
     "@ui5/cli": "^4.0.43",
     "mbt": "^1.2.43",
     "rimraf": "^5.0.5",

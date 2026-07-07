@@ -1,21 +1,20 @@
 import Control from "sap/ui/core/Control";
 import Core from "sap/ui/core/Core";
 import ResourceBundle from "sap/base/i18n/ResourceBundle";
-import Event from "sap/ui/base/Event";
 import OverflowToolbar from "sap/m/OverflowToolbar";
 import ToolbarSeparator from "sap/m/ToolbarSeparator";
 import Title from "sap/m/Title";
 import Label from "sap/m/Label";
 import Button from "sap/m/Button";
-import Slider from "sap/m/Slider";
-import Select from "sap/m/Select";
-import SegmentedButton from "sap/m/SegmentedButton";
+import Slider, { Slider$LiveChangeEvent } from "sap/m/Slider";
+import Select, { Select$ChangeEvent } from "sap/m/Select";
+import SegmentedButton, { SegmentedButton$SelectionChangeEvent } from "sap/m/SegmentedButton";
 import SegmentedButtonItem from "sap/m/SegmentedButtonItem";
 import Item from "sap/ui/core/Item";
 import MessageToast from "sap/m/MessageToast";
 import Dialog from "sap/m/Dialog";
 import Input from "sap/m/Input";
-import ColorPalettePopover from "sap/m/ColorPalettePopover";
+import ColorPalettePopover, { ColorPalettePopover$ColorSelectEvent } from "sap/m/ColorPalettePopover";
 import HTML from "sap/ui/core/HTML";
 import DrawingBoardRenderer from "./DrawingBoardRenderer";
 import { insertTextChunk, readTextChunk, encodeUtf8ToBase64, decodeBase64ToUtf8 } from "./PngMetadata";
@@ -555,14 +554,14 @@ export default class DrawingBoard extends Control {
 	/* gestionnaires d'événements                                  */
 	/* =========================================================== */
 
-	private _onToolChange(oEvent: Event): void {
+	private _onToolChange(oEvent: SegmentedButton$SelectionChangeEvent): void {
 		const oItem = oEvent.getParameter("item") as SegmentedButtonItem;
 		this._state.tool = oItem.getKey();
 		this._state.selectedShapeId = null;
 		this._render();
 	}
 
-	private _onModeChange(oEvent: Event): void {
+	private _onModeChange(oEvent: SegmentedButton$SelectionChangeEvent): void {
 		const oItem = oEvent.getParameter("item") as SegmentedButtonItem;
 		const sMode = oItem.getKey() as DrawMode;
 		this._state.mode = sMode;
@@ -594,7 +593,7 @@ export default class DrawingBoard extends Control {
 		if (!this._colorPopover) {
 			this._colorPopover = new ColorPalettePopover({
 				defaultColor: this._state.strokeColor,
-				colorSelect: (oEvent: Event) => {
+				colorSelect: (oEvent: ColorPalettePopover$ColorSelectEvent) => {
 					const sValue = oEvent.getParameter("value") as string;
 					if (sValue) {
 						this._state.strokeColor = sValue;
@@ -628,7 +627,7 @@ export default class DrawingBoard extends Control {
 		this._render();
 	}
 
-	private _onZoomSliderChange(oEvent: Event): void {
+	private _onZoomSliderChange(oEvent: Slider$LiveChangeEvent): void {
 		if (!this._canvas) {
 			return;
 		}
@@ -644,7 +643,7 @@ export default class DrawingBoard extends Control {
 		this._state.zoom = 1;
 		this._state.panX = 0;
 		this._state.panY = 0;
-		this._zoomSlider.setValue(1);
+		this._zoomSlider.setValue(1, {});
 		this._render();
 	}
 
@@ -1519,7 +1518,7 @@ export default class DrawingBoard extends Control {
 		}
 	}
 
-	private _onCameraDeviceChange(oEvent: Event): void {
+	private _onCameraDeviceChange(oEvent: Select$ChangeEvent): void {
 		const oItem = oEvent.getParameter("selectedItem") as Item | null;
 		if (oItem) {
 			void this._startCamera(oItem.getKey());
@@ -1828,7 +1827,7 @@ export default class DrawingBoard extends Control {
 		this._state.zoom = fNewZoom;
 		this._state.panX = oAnchor.x - oBefore.x * this._state.zoom;
 		this._state.panY = oAnchor.y - oBefore.y * this._state.zoom;
-		this._zoomSlider.setValue(fNewZoom);
+		this._zoomSlider.setValue(fNewZoom, {});
 		this._render();
 	}
 

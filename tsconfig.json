@@ -16,7 +16,7 @@
       "zab/be/resa/zuidrawapp/*": ["./webapp/*"]
     },
     "typeRoots": ["./node_modules/@types", "./node_modules/@sapui5"],
-    "types": ["ts-types-esm"]
+    "types": ["types"]
   },
   "include": ["webapp/**/*.ts"]
 }
