@@ -24,10 +24,10 @@ builder:
       afterTask: ui5-task-flatten-library
       configuration:
         target:
-          destination: DTACLNT300
-          url: http://resawdt:45300
+          url: http://tec0033wi.tecteo.adms:8000
+          client: "300"
         app:
-          name: ZUI_AB_LIBR_DRAW
+          name: ZUIABLIBRDRAW
           description: "AB : Draw Manage Library"
           package: ZTEC_AB
-          transport: REPLACE_WITH_TRANSPORT
+          transport: DTAK976940

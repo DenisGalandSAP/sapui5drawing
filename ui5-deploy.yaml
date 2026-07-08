@@ -21,8 +21,8 @@ builder:
       afterTask: generateCachebusterInfo
       configuration:
         target:
-          destination: DTACLNT300
-          url: http://resawdt:45300
+          url: http://tec0033wi.tecteo.adms:8000
+          client: "300"
         app:
           name: ZUI_AB_DRAW_APP
           description: "AB : Draw App"
