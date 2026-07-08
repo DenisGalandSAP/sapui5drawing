@@ -34,7 +34,7 @@ server:
         backend:
           - path: /sap
             url: http://tec0033wi.tecteo.adms:8000
-            destination: DTACLNT300
+            destination: DTACLNT310
     - name: fiori-tools-appreload
       afterMiddleware: compression
       configuration:
