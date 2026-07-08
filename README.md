@@ -5,7 +5,7 @@
 |**Template Used**<br>standalone app + SAPUI5 library|
 |**Service Type**<br>None (self-contained drawing board)|
 |**App Module**<br>ZUI_AB_DRAW_APP — namespace `zab.be.resa.zuidrawapp`|
-|**Library Module**<br>ZUI_AB_LIBR_DRAW — namespace `zab.be.resa.draw`|
+|**Library Module**<br>ZUIABLIBRDRAW — namespace `zab.be.resa.draw`|
 |**Application Title**<br>AB : Draw App|
 |**UI5 Theme**<br>sap_fiori_3|
 |**UI5 Version**<br>1.71.58 (on-premise ECC, runtime 1.71.76)|
@@ -24,11 +24,11 @@ sapui5drawing/
 │         DrawingBoard.ts   Custom control: canvas drawing board + its own toolbar.
 │         DrawingBoardRenderer.ts, library.ts, .library, messagebundle.properties,
 │         themes/<theme>/library.source.less
-├─ ui5.yaml           App project (serves the built library statically, see below).
-├─ ui5-local.yaml     App project against the local SAPUI5 framework.
-├─ ui5-deploy.yaml    Deploys the app as a BSP (ZUI_AB_DRAW_APP).
+├─ ui5.yaml           App project — consumes the library from DTA 300 (see below).
+├─ ui5-local.yaml     App project — fully offline: SAPUI5 framework + library both served from local disk.
+├─ ui5-deploy.yaml    App deploy config (the app itself is not deployed).
 ├─ library/ui5.yaml         Library build (TypeScript → JS).
-└─ library/ui5-deploy.yaml  Deploys the flattened library as a BSP (ZUI_AB_LIBR_DRAW).
+└─ library/ui5-deploy.yaml  Deploys the flattened library as a BSP (ZUIABLIBRDRAW).
 ```
 
 ### How the app "calls the folder as a real library"
@@ -37,19 +37,35 @@ The app never imports the library source directly. Instead:
 
 1. `npm run build:lib` builds `library/` (TypeScript → JS, theme, preload) into
    `library/dist/resources/zab/be/resa/draw/…`.
-2. In `ui5.yaml` / `ui5-local.yaml`, the **`fiori-tools-servestatic`** middleware mounts
-   that folder at `/resources/zab/be/resa/draw`, so the dev server serves it exactly
-   like `sap.m` or `sap.uxap`.
-3. The app declares `zab.be.resa.draw` in `manifest.json` (`sap.ui5/dependencies/libs`)
-   and uses the control in XML: `<draw:DrawingBoard editable="true" height="70vh"/>`.
+2. The app declares `zab.be.resa.draw` in `manifest.json` (`sap.ui5/dependencies/libs`)
+   and, via **`resourceRoots`** (in `webapp/index.html`, `webapp/test/flpSandbox.html`
+   and `manifest.json`), maps that namespace to the library's BSP path
+   `/sap/bc/ui5_ui5/sap/zuiablibrdraw/resources/zab/be/resa/draw`.
+3. It uses the control in XML: `<draw:DrawingBoard editable="true" height="70vh"/>`.
 
-> Ordering note: in `ui5.yaml`, `fiori-tools-proxy` is chained
-> `afterMiddleware: fiori-tools-servestatic` so that `/resources/zab/be/resa/draw` is
-> served locally and **not** proxied to `ui5.sap.com`.
+Where that BSP path is served from depends on which config you run:
 
-Because the library is served statically, it must be built first — the `start` scripts
-run `npm run build:lib` automatically. Re-run `npm run build:lib` after changing the
-library.
+| Config / script | Library source |
+|---|---|
+| Config / script | SAPUI5 framework | Library `zab.be.resa.draw` |
+|---|---|---|
+| `ui5.yaml` — `npm start`, `npm run start-noflp` | `ui5.sap.com` (CDN) via the `ui5` proxy | **DTA 300** (BSP `ZUIABLIBRDRAW`), via the `/sap` `fiori-tools-proxy` → `http://tec0033wi.tecteo.adms:8000` |
+| `ui5-local.yaml` — `npm run start-local` | **local SDK** folder via `fiori-tools-servestatic` (`/resources`) | **local `library/dist`** via `fiori-tools-servestatic` (same BSP path) |
+
+> Because both configs share `flpSandbox.html` (one `resourceRoots` value → the BSP
+> path), the two modes differ only in *where the library is served from* — DTA 300 vs.
+> local disk.
+
+> **`start-local` is fully offline** — no CDN, no ABAP. It serves both the framework and
+> the library from disk. It expects the SAPUI5 SDK unpacked at the path set in
+> `ui5-local.yaml` (`fiori-tools-servestatic` → `/resources`, currently
+> `C:/Users/dgaland/projects/SAPUI5/resources`); change that `src` to wherever your SDK
+> lives. The `framework:` block is intentionally omitted so the tooling doesn't try to
+> npm-install SAPUI5.
+
+The `start` scripts run `npm run build:lib` automatically. For `start-local`, re-run
+`npm run build:lib` after changing the library so `library/dist` is up to date. For
+`start` (DTA 300), redeploy the library (`npm run deploy-lib`) to pick up changes.
 
 > **Using the `DrawingBoard` control in your own SAPUI5 app?** See
 > [`library/README.md`](library/README.md) for the consumer guide: wiring the
@@ -74,15 +90,16 @@ npm run build        # build both (library first, then app)
 
 ### Deploying to ABAP
 
-The app and the library deploy as **two separate BSP applications**. Set the transport
-in `ui5-deploy.yaml` / `library/ui5-deploy.yaml` (currently `REPLACE_WITH_TRANSPORT`).
+Only the **library** is deployed (as its own BSP); this standalone app is a local
+harness and is not deployed. Set the transport in `library/ui5-deploy.yaml`.
 
 ```
-npm run deploy-lib   # build + flatten + deploy the library (ZUI_AB_LIBR_DRAW)
-npm run deploy       # build + deploy the app (ZUI_AB_DRAW_APP)
+npm run deploy-lib   # build + flatten + deploy the library (ZUIABLIBRDRAW)
 ```
 
-Deploy the library first so the app can resolve `/resources/zab/be/resa/draw` at runtime.
+Once deployed, any **other** app on the same ABAP server can consume the library — see
+[`library/README.md` §2](library/README.md) (a deployed consumer needs only a
+`dependencies/libs` entry; the SAPUI5 app-index resolves it — **no `resourceRoots`**).
 
 #### Pre-requisites:
 

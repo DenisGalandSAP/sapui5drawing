@@ -50,6 +50,9 @@
   },
   "sap.ui5": {
     "flexEnabled": false,
+    "resourceRoots": {
+      "zab.be.resa.draw": "sap/bc/ui5_ui5/sap/zuiablibrdraw/resources/zab/be/resa/draw"
+    },
     "dependencies": {
       "minUI5Version": "1.71.58",
       "libs": {

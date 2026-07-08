@@ -10,16 +10,12 @@ resources:
       webapp: webapp
 server:
   customMiddleware:
-    # Sert la bibliothèque zab.be.resa.draw (construite dans library/dist) comme
-    # une vraie bibliothèque SAPUI5, sous /resources/zab/be/resa/draw. Doit être
-    # enregistré AVANT le proxy afin que ce chemin soit servi localement et non
-    # transféré vers ui5.sap.com.
-    - name: fiori-tools-servestatic
-      afterMiddleware: compression
-      configuration:
-        paths:
-          - path: /resources/zab/be/resa/draw
-            src: "library/dist/resources/zab/be/resa/draw"
+    # La bibliothèque zab.be.resa.draw n'est plus servie localement : elle est
+    # consommée depuis le système ABAP (DTA 300) où elle est déployée en tant que
+    # BSP ZUIABLIBRDRAW. Le mapping resourceRoots de webapp/index.html pointe
+    # "zab.be.resa.draw" vers
+    # /sap/bc/ui5_ui5/sap/zuiablibrdraw/resources/zab/be/resa/draw, chemin
+    # transféré vers le backend par le proxy fiori-tools-proxy ci-dessous (/sap).
     - name: ui5-tooling-transpile-middleware
       afterMiddleware: compression
       configuration:
@@ -27,9 +23,7 @@ server:
         transpileAsync: true
         transpileTypeScript: true
     - name: fiori-tools-proxy
-      # Enregistré APRÈS servestatic pour que /resources/zab/be/resa/draw soit
-      # servi localement et ne soit pas transféré vers ui5.sap.com.
-      afterMiddleware: fiori-tools-servestatic
+      afterMiddleware: compression
       configuration:
         ignoreCertError: false # If set to true, certificate errors will be ignored. E.g. self-signed certificates will be accepted
         ui5:
@@ -39,7 +33,7 @@ server:
           url: https://ui5.sap.com
         backend:
           - path: /sap
-            url: http://resawdt:45300
+            url: http://tec0033wi.tecteo.adms:8000
             destination: DTACLNT300
     - name: fiori-tools-appreload
       afterMiddleware: compression

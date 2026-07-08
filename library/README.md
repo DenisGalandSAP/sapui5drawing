@@ -28,13 +28,109 @@ model, no wiring required.
 
 ---
 
-## 2. Reference the library from another app (`manifest.json`)
+## 2. Reference the library from another app
 
-This library is **not** on `ui5.sap.com`, so a consuming app has to tell UI5 two
-things in its own `manifest.json`:
+Every consuming app must declare the dependency — under `sap.ui5/dependencies/libs`
+in its `manifest.json`:
 
-1. **that it depends on the library** — under `sap.ui5/dependencies/libs`, and
-2. **where the library's files live** — under `sap.ui5/resourceRoots`.
+```json
+{
+  "sap.ui5": {
+    "dependencies": {
+      "minUI5Version": "1.71.58",
+      "libs": {
+        "sap.ui.core": {},
+        "sap.m": {},
+        "zab.be.resa.draw": {}
+      }
+    }
+  }
+}
+```
+
+Whether you *also* need `resourceRoots` (to tell UI5 **where** the files live) depends
+on how the app and the library are hosted. Pick the scenario that matches you:
+
+### Scenario A — Deployed app on the same ABAP server (no `resourceRoots` needed)
+
+If your consuming app is deployed as a BSP on the **same** ABAP front-end server where
+the library BSP (`ZUIABLIBRDRAW`) lives, you need **only** the `dependencies/libs` entry
+above. The SAPUI5 **application index** resolves the `zab.be.resa.draw` namespace to the
+library BSP automatically — **do not add a `resourceRoots` block**.
+
+> Real example in this landscape: `ZUI_AB_UI5F_AP` consumes the reuse library
+> `zab.be.resa.zuiablibrleaf` with a plain `dependencies/libs` entry and **no**
+> `resourceRoots`.
+
+Prerequisites:
+
+- Deploy the library BSP **first** (`npm run deploy-lib` → `ZUIABLIBRDRAW`), then the app.
+- The app index must be current. It is normally recalculated on deploy; if the library
+  isn't found, run `/UI5/APP_INDEX_CALCULATE` (report `/UI5/APP_INDEX_CALCULATE`) on the
+  ABAP system.
+
+### Scenario B — Local development of a consumer app
+
+While developing locally with the UI5 tooling, the app index isn't available, so map the
+namespace explicitly and serve the files. Point `resourceRoots` at the library's BSP
+path and then either:
+
+- **(b1) serve it from a built `library/dist`** with `fiori-tools-servestatic` — this is
+  what this repo's `ui5-local.yaml` does (fully offline), or
+- **(b2) proxy `/sap` to the ABAP server** so the deployed BSP is fetched live — this is
+  what this repo's `ui5.yaml` does.
+
+Shared bootstrap mapping (in `index.html` / `flpSandbox.html`, absolute so it also works
+for a standalone launch of a deployed app):
+
+```html
+data-sap-ui-resourceroots='{
+    "your.consumer.app": "./",
+    "zab.be.resa.draw": "/sap/bc/ui5_ui5/sap/zuiablibrdraw/resources/zab/be/resa/draw"
+}'
+```
+
+`ui5-local.yaml` (b1 — serve the built library statically under the BSP path, **before**
+the proxy):
+
+```yaml
+server:
+  customMiddleware:
+    - name: fiori-tools-servestatic
+      afterMiddleware: compression
+      configuration:
+        paths:
+          - path: /sap/bc/ui5_ui5/sap/zuiablibrdraw/resources/zab/be/resa/draw
+            src: "library/dist/resources/zab/be/resa/draw"
+    - name: fiori-tools-proxy
+      afterMiddleware: fiori-tools-servestatic   # after servestatic, so BSP path is local
+      configuration:
+        backend:
+          - path: /sap
+            url: http://<abap-host>:<port>
+```
+
+`ui5.yaml` (b2 — no servestatic; the proxy fetches the live BSP):
+
+```yaml
+server:
+  customMiddleware:
+    - name: fiori-tools-proxy
+      afterMiddleware: compression
+      configuration:
+        ui5:
+          path: [/resources, /test-resources]
+          url: https://ui5.sap.com
+        backend:
+          - path: /sap
+            url: http://<abap-host>:<port>
+```
+
+### Scenario C — Bundle the library into the app, or host it elsewhere
+
+When the library is **not** deployed as its own BSP on the app's server (e.g. you copy it
+into the app, or host it on a static server / CDN), give `resourceRoots` a value that
+points at the folder containing the library files directly.
 
 ### How `resourceRoots` works
 
@@ -80,8 +176,12 @@ The `resourceRoots` **value** is what changes per setup:
 | Where the library is hosted | `resourceRoots` value |
 |---|---|
 | Copied inside your app (e.g. `webapp/thirdparty/zab/be/resa/draw`) | `"./thirdparty/zab/be/resa/draw"` (relative to the app's `Component`/`webapp` root) |
-| Deployed as its own ABAP BSP (e.g. `ZUI_AB_LIBR_DRAW`) | `"/sap/bc/ui5_ui5/sap/zui_ab_libr_draw/resources/zab/be/resa/draw"` |
+| Deployed as its own ABAP BSP (`ZUIABLIBRDRAW`) | `"/sap/bc/ui5_ui5/sap/zuiablibrdraw/resources/zab/be/resa/draw"` |
 | Any static host / CDN | `"https://host/path/to/resources/zab/be/resa/draw"` |
+
+> For a BSP-deployed library consumed by a **deployed** app on the **same** server,
+> prefer Scenario A (no `resourceRoots`). The absolute BSP value above is for local dev
+> (Scenario B) or a standalone launch.
 
 > A **relative** value is resolved against the consuming app, so it survives being
 > deployed under different server prefixes — prefer it when you bundle the library
@@ -102,34 +202,9 @@ npm run build:lib     # -> library/dist/resources/zab/be/resa/draw
 - **Deploy separately:** deploy that same folder as its own BSP / static app and
   use the absolute value.
 
-### Local dev shortcut (UI5 tooling)
-
-If you don't want to copy files while developing, you can instead serve the built
-`dist` folder statically from the dev server and skip `resourceRoots` entirely —
-this is what the sample app in this repo does. In the app's `ui5.yaml`:
-
-```yaml
-server:
-  customMiddleware:
-    - name: fiori-tools-servestatic
-      afterMiddleware: compression
-      configuration:
-        paths:
-          - path: /resources/zab/be/resa/draw
-            src: "library/dist/resources/zab/be/resa/draw"
-    # IMPORTANT: register the UI5 proxy AFTER servestatic so this path is served
-    # locally and not forwarded to ui5.sap.com.
-    - name: fiori-tools-proxy
-      afterMiddleware: fiori-tools-servestatic
-      configuration:
-        ui5:
-          path: [/resources, /test-resources]
-          url: https://ui5.sap.com
-```
-
-Here the library is reachable under the standard `/resources/zab/be/resa/draw`, so
-only the `dependencies/libs` entry is needed (no `resourceRoots`). For a
-**deployed** app, use `resourceRoots` as shown above.
+For the UI5-tooling dev-server recipes (serve from `library/dist` statically, or proxy
+`/sap` to the ABAP server), see **Scenario B** above — that is what this repo's
+`ui5-local.yaml` and `ui5.yaml` do respectively.
 
 ---
 

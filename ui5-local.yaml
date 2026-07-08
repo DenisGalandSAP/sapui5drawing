@@ -4,21 +4,21 @@ specVersion: "3.1"
 metadata:
   name: zab.be.resa.zuidrawapp
 type: application
-framework:
-  name: SAPUI5
-  version: 1.71.61
-  libraries:
-    - name: sap.m
-    - name: sap.ui.core
-    - name: sap.uxap
-    - name: themelib_sap_fiori_3
 server:
   customMiddleware:
+    # Mode local/offline : aucune résolution du framework via npm. Les ressources
+    # SAPUI5 sont servies depuis le SDK local (C:/Users/dgaland/projects/SAPUI5),
+    # et la bibliothèque zab.be.resa.draw depuis library/dist (chemin BSP vers
+    # lequel pointe le resourceRoots partagé de webapp/index.html et
+    # flpSandbox.html). servestatic est enregistré AVANT le proxy, donc rien ne
+    # part vers DTA 300 / ui5.sap.com pour ces chemins.
     - name: fiori-tools-servestatic
       afterMiddleware: compression
       configuration:
         paths:
-          - path: /resources/zab/be/resa/draw
+          - path: /resources
+            src: "C:/Users/dgaland/projects/SAPUI5/resources"
+          - path: /sap/bc/ui5_ui5/sap/zuiablibrdraw/resources/zab/be/resa/draw
             src: "library/dist/resources/zab/be/resa/draw"
     - name: ui5-tooling-transpile-middleware
       afterMiddleware: compression
@@ -33,12 +33,14 @@ server:
         path: webapp
         delay: 300
     - name: fiori-tools-proxy
-      afterMiddleware: compression
+      # Enregistré APRÈS servestatic pour que le chemin BSP de la bibliothèque
+      # soit servi localement et non transféré vers DTA 300.
+      afterMiddleware: fiori-tools-servestatic
       configuration:
         ignoreCertError: false # If set to true, certificate errors will be ignored. E.g. self-signed certificates will be accepted
         backend:
           - path: /sap
-            url: http://resawdt:45300
+            url: http://tec0033wi.tecteo.adms:8000
             destination: DTACLNT300
     - name: fiori-tools-preview
       afterMiddleware: fiori-tools-appreload
