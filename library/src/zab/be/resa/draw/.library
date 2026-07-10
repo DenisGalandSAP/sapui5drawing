@@ -3,7 +3,7 @@
     <name>zab.be.resa.draw</name>
     <vendor>Prayon</vendor>
     <copyright>Prayon</copyright>
-    <version>0.0.1</version>
+    <version>0.0.2</version>
     <documentation>Bibliothèque de dessin réutilisable (contrôle DrawingBoard).</documentation>
 
     <dependencies>

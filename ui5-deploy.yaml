@@ -27,6 +27,6 @@ builder:
           name: ZUI_AB_DRAW_APP
           description: "AB : Draw App"
           package: ZTEC_AB
-          transport: REPLACE_WITH_TRANSPORT
+          transport: DTAK976940
         exclude:
           - /test/

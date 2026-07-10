@@ -26,8 +26,16 @@ builder:
         target:
           url: http://tec0033wi.tecteo.adms:8000
           client: "300"
+        credentials:
+          username: env:USR
+          password: env:SAP_PWD
         app:
           name: ZUIABLIBRDRAW
           description: "AB : Draw Manage Library"
           package: ZTEC_AB
           transport: DTAK976940
+        # Le serveur ABAP rejette les fichiers TypeScript (type inconnu) et fait
+        # échouer tout l'envoi (HTTP 400) : on les exclut de l'archive déployée.
+        exclude:
+          - '\.ts$'
+          - '\.d\.ts\.map$'

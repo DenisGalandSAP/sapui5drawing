@@ -69,8 +69,28 @@ The `start` scripts run `npm run build:lib` automatically. For `start-local`, re
 
 > **Using the `DrawingBoard` control in your own SAPUI5 app?** See
 > [`library/README.md`](library/README.md) for the consumer guide: wiring the
-> library into an app, the control's API, the toolbar features, and the PNG
-> save/reopen format (including how to read the embedded coordinates).
+> library into an app, the control's API, the toolbar features, the PNG
+> save/reopen format (including how to read the embedded coordinates), and the
+> **backend croquis** save/load to SAP attachments (§7).
+
+### Saving the croquis to SAP (backend attachment)
+
+The board can save/load the drawing straight to SAP as an attachment (OData service
+`ZTS_CA_UI5F_ATTA`, object type `CROQ`), keyed by an object id — by spec the
+**notification number** (`QMEL-QMNUM`). The standalone app wires this in
+`webapp/view/Main.view.xml` / `webapp/controller/Main.controller.ts`:
+
+```xml
+<draw:DrawingBoard editable="true" height="70vh"
+    otype="CROQ" objid="{context>/objid}" />
+```
+
+The controller sets `context>/objid` to the notification number (for the standalone
+harness it is hardcoded to a test notification). The **☁ Load** / **💾 Save** toolbar
+buttons then read/write the croquis for that object. This needs the app to run
+same-origin with the ABAP server (deployed BSP, or `npm start` which proxies `/sap`);
+attachments are stored per `sap-client`. Full details — request flow, single-version
+overwrite, requirements — are in [`library/README.md` §7](library/README.md).
 
 ### Starting the app
 

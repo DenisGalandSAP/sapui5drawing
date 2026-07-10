@@ -15,6 +15,9 @@ model, no wiring required.
 - **Save / reopen** — download a single PNG that shows the annotated image *and*
   carries the re-editable project (image + vector lines in image-pixel
   coordinates) in a hidden metadata chunk; reopen it later to keep editing.
+- **Backend croquis** — optionally load / save the drawing straight to SAP as an
+  attachment (via the `ZTS_CA_UI5F_ATTA` OData service), keyed by an object id such
+  as a notification number — no local file step. See §7.
 
 ---
 
@@ -255,6 +258,9 @@ this.getView().byId("page").addContent(oBoard);
 | `editable` | `boolean` | `true` | When `false`, the toolbar and pointer interactions are disabled (view-only). |
 | `width` | `sap.ui.core.CSSSize` | `"100%"` | Width of the control. |
 | `height` | `sap.ui.core.CSSSize` | `"100%"` | Height of the control. |
+| `serviceUrl` | `string` | `"/sap/opu/odata/sap/ZTS_CA_UI5F_ATTA"` | Base URL of the attachment OData service used by the croquis Load/Save buttons (§7). |
+| `otype` | `string` | `""` | Attachment object type. For a croquis: `"CROQ"`. |
+| `objid` | `string` | `""` | Attachment object id = the storage key of the croquis (e.g. the notification number `QMNUM`). The croquis Load/Save buttons are enabled only when **both** `otype` and `objid` are set. |
 
 ```xml
 <draw:DrawingBoard editable="{= ${ui>/mode} === 'edit' }" height="80vh" />
@@ -267,9 +273,17 @@ oBoard.setEditable(false);   // lock (view-only)
 oBoard.setEditable(true);    // unlock
 ```
 
+Set the backend context at runtime too:
+
+```ts
+oBoard.setOtype("CROQ");
+oBoard.setObjid("000010000020");   // e.g. the notification number (QMNUM)
+```
+
 The control is self-contained: it builds and manages its own toolbar, canvas,
 history and file dialogs. There are currently no public events or a
-shapes-getter API — persistence is done through the PNG export (see §7).
+shapes-getter API — persistence is done through the PNG export (§6) or, when a
+backend context is set, through the attachment service (§7).
 
 ---
 
@@ -286,6 +300,7 @@ shapes-getter API — persistence is done through the PNG export (see §7).
 | **Zoom** | Slider, reset view, wheel to zoom, pan tool to move the viewport. |
 | **History** | Undo / Redo (also **Ctrl+Z** / **Ctrl+Y** / **Ctrl+Shift+Z**). **Delete**/**Backspace** removes the selection. |
 | **Files** | **Open** a project (PNG/JSON) and **Download** the annotated PNG with embedded coordinates. |
+| **Backend** (croquis) | Only when `otype`+`objid` are set: **☁ Load croquis** pulls the saved croquis back into the board, and **💾 Save croquis** stores the current drawing as a SAP attachment. See §7. |
 
 To transform an object: pick the **Select** tool, click the drawing (a dashed
 box shows the selection), then move/resize/rotate/recolor/delete it.
@@ -377,7 +392,73 @@ async function readProjectFromPng(blob) {
 
 ---
 
-## 7. Notes & limitations
+## 7. Backend persistence — save/load a croquis as a SAP attachment
+
+Besides the local PNG download/open (§6), the board can load and save the drawing
+directly to SAP as an **attachment**, with no local file step. It is driven by the
+`otype` / `objid` properties and two extra toolbar buttons.
+
+### Wiring
+
+```xml
+<draw:DrawingBoard
+    editable="true"
+    height="70vh"
+    otype="CROQ"
+    objid="{context>/objid}" />
+```
+
+- `otype` — the attachment object type; for a croquis it is **`CROQ`**.
+- `objid` — the **storage key**: there is one croquis per `objid`. By spec the key is
+  the **notification number** (`QMEL-QMNUM`). The board may be entered from a
+  notification *or* an order — when you start from an order, resolve its notification
+  (`AFIH-QMNUM`) and pass that `QMNUM` as `objid`.
+- `serviceUrl` — defaults to `/sap/opu/odata/sap/ZTS_CA_UI5F_ATTA`; override only if the
+  attachment service lives elsewhere.
+
+The two buttons (**☁ Load**, **💾 Save**) sit at the end of the toolbar and are enabled
+only when `editable` is `true` **and** both `otype` and `objid` are set.
+
+### What the buttons do
+
+- **💾 Save** builds the composite PNG (photo + strokes, with the re-editable project
+  embedded exactly as in §6) and stores it on `otype`/`objid`. Because only **one
+  version** of a croquis exists, Save first deletes any existing croquis for that key,
+  then uploads the new one under the deterministic file name `"<objid>-croquis.png"`.
+- **☁ Load** fetches that croquis back and opens it — the embedded `zabDrawProject`
+  chunk is restored, so you keep full vector editing.
+
+### How it talks to the service
+
+The control calls the `ZTS_CA_UI5F_ATTA` OData V2 service directly (`fetch`, same
+origin, cookie session):
+
+| Step | Request |
+|---|---|
+| Read | `GET …/zv_ca_c_ui5f_atta_head(Otype='…',Objid='…')?$expand=to_Attachment` — the `to_Attachment` list is filtered to `*croquis*.png`. |
+| Save | `GET …/` with header `x-csrf-token: Fetch` → token, then `POST …/zv_ca_c_ui5f_atta_info` with headers `x-csrf-token` + `slug: <otype>&&<objid>&&<fileName>` and the raw PNG bytes. |
+| Overwrite | `DELETE …/zv_ca_c_ui5f_atta_info(Otype='…',Objid='…',Attid='…')` for each existing croquis before the POST. |
+
+On success the backend stores the row in table `ztca_ui5f_atta` (keyed by
+`otype/objid/attid/fname`). Errors surface in a `MessageToast` with the HTTP status
+and the SAP message.
+
+### Requirements & gotchas
+
+- The object type must be configured in the attachment customizing (max size, and the
+  allowed extensions must include `png`). `CROQ` is configured for this.
+- The app must run **same-origin** with the ABAP server so the session cookie and CSRF
+  token apply — a deployed BSP app, or a dev server that proxies `/sap` (this repo's
+  `ui5.yaml`). The `slug` file name must be ASCII.
+- Attachments are stored **per client**: check the `sap-client` you run on when
+  verifying the row in `ztca_ui5f_atta`.
+- A successful `POST` returns `201` with an **empty** entity body (`Otype=''`,
+  `Attid='000000'`) — that is normal here; the backend clears its context before
+  building the response. The row is still inserted.
+
+---
+
+## 8. Notes & limitations
 
 - **Rebuild after changes** — the app serves the built `library/dist`; run
   `npm run build:lib` after editing the library, and hard-refresh (the UI5
