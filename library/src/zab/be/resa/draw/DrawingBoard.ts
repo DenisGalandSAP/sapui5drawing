@@ -2,8 +2,7 @@ import Control from "sap/ui/core/Control";
 import Core from "sap/ui/core/Core";
 import ResourceBundle from "sap/base/i18n/ResourceBundle";
 import Event from "sap/ui/base/Event";
-import OverflowToolbar from "sap/m/OverflowToolbar";
-import ToolbarSeparator from "sap/m/ToolbarSeparator";
+import FlexBox from "sap/m/FlexBox";
 import Title from "sap/m/Title";
 import Label from "sap/m/Label";
 import Button from "sap/m/Button";
@@ -189,8 +188,8 @@ export default class DrawingBoard extends Control {
 			objid: { type: "string", defaultValue: "" }
 		},
 		aggregations: {
-			/** Barre d'outils construite par le contrôle lui-même. */
-			_toolbar: { type: "sap.m.OverflowToolbar", multiple: false, visibility: "hidden" }
+			/** Conteneur de barre d'outils (FlexBox à retour à la ligne) construit par le contrôle. */
+			_toolbar: { type: "sap.m.FlexBox", multiple: false, visibility: "hidden" }
 		}
 	};
 
@@ -207,6 +206,8 @@ export default class DrawingBoard extends Control {
 	private _redoStack!: Shape[][];
 	private _boundCanvas!: HTMLCanvasElement | null;
 	private _windowBound!: boolean;
+	/** Vrai une fois le chargement automatique du croquis tenté (une seule fois). */
+	private _croquisAutoLoaded!: boolean;
 	private _retrySetupTimer!: number | null;
 	private _resizeObserver!: ResizeObserver | null;
 	private _container!: HTMLElement | null;
@@ -270,6 +271,7 @@ export default class DrawingBoard extends Control {
 		this._pendingDragHistory = false;
 		this._boundCanvas = null;
 		this._windowBound = false;
+		this._croquisAutoLoaded = false;
 		this._retrySetupTimer = null;
 		this._resizeObserver = null;
 		this._container = null;
@@ -444,21 +446,24 @@ export default class DrawingBoard extends Control {
 		this._loadCroquisButton = new Button({ icon: "sap-icon://cloud", tooltip: this._getText("loadCroquis"), press: () => { void this._onLoadCroquis(); } });
 		this._saveCroquisButton = new Button({ icon: "sap-icon://save", tooltip: this._getText("saveCroquis"), type: "Emphasized", press: () => { void this._onSaveCroquis(); } });
 
-		const oToolbar = new OverflowToolbar({
-			content: [
+		// Barre d'outils à retour à la ligne : un FlexBox « Wrap » place tous les
+		// contrôles sur une seule ligne tant que la largeur le permet, puis les fait
+		// déborder sur une 2e (puis 3e…) ligne dès qu'il n'y a plus assez de place.
+		const oToolbar = new FlexBox({
+			wrap: "Wrap",
+			alignItems: "Center",
+			width: "100%",
+			items: [
 				new Title({ text: this._getText("toolsTitle") }),
 				this._modeSelector,
-				new ToolbarSeparator(),
 				oUploadButton,
 				oCameraButton,
 				this._toolSelector,
 				this._colorButton,
-				new ToolbarSeparator(),
 				new Label({ text: this._getText("objectsLabel") }),
 				this._presetSelect,
 				oInsertButton,
 				oTextButton,
-				new ToolbarSeparator(),
 				new Label({ text: this._getText("zoomLabel") }),
 				this._zoomSlider,
 				oResetButton,
@@ -472,11 +477,11 @@ export default class DrawingBoard extends Control {
 				oClearButton,
 				oOpenButton,
 				oDownloadButton,
-				new ToolbarSeparator(),
 				this._loadCroquisButton,
 				this._saveCroquisButton
 			]
 		});
+		oToolbar.addStyleClass("dbToolbar");
 
 		// Contrôles liés au dessin : (dés)activés selon le mode et la présence d'une photo.
 		this._drawingControls = [
@@ -583,13 +588,44 @@ export default class DrawingBoard extends Control {
 	public setOtype(sValue: string): this {
 		this.setProperty("otype", sValue, true);
 		this._applyBackendState();
+		this._maybeAutoLoadCroquis();
 		return this;
 	}
 
 	public setObjid(sValue: string): this {
 		this.setProperty("objid", sValue, true);
 		this._applyBackendState();
+		this._maybeAutoLoadCroquis();
 		return this;
+	}
+
+	/**
+	 * API publique : déclenche l'enregistrement du croquis dans l'opération,
+	 * exactement comme le bouton « Enregistrer ». Un hôte peut l'appeler lui-même
+	 * (p. ex. à la fermeture d'une popup, avant que l'utilisateur ne quitte sans
+	 * enregistrer). Renvoie la promesse de l'opération réseau.
+	 */
+	public saveCroquis(): Promise<void> {
+		return this._onSaveCroquis();
+	}
+
+	/** API publique : (re)charge le croquis de l'opération depuis le backend. */
+	public loadCroquis(): Promise<void> {
+		return this._onLoadCroquis();
+	}
+
+	/**
+	 * Tente, une seule fois, un chargement automatique du croquis dès que le tableau
+	 * est monté et que le contexte backend (Otype + Objid) est disponible : « quand
+	 * la bibliothèque est chargée, on essaie de charger le croquis ». Silencieux si
+	 * aucun croquis n'existe encore pour l'opération.
+	 */
+	private _maybeAutoLoadCroquis(): void {
+		if (this._croquisAutoLoaded || !this._canvas || !this._hasBackendContext()) {
+			return;
+		}
+		this._croquisAutoLoaded = true;
+		void this._onLoadCroquis(true);
 	}
 
 	/** Vrai si le contrôle dispose du contexte (Otype + Objid) pour joindre l'opération. */
@@ -724,15 +760,21 @@ export default class DrawingBoard extends Control {
 	 * Récupère le croquis (PNG) joint à l'objet et l'ouvre dans le tableau pour
 	 * poursuivre l'édition. Le projet ré-éditable est restauré depuis le chunk PNG.
 	 */
-	private async _onLoadCroquis(): Promise<void> {
+	private async _onLoadCroquis(bAuto = false): Promise<void> {
 		if (!this._hasBackendContext()) {
-			MessageToast.show(this._getText("backendContextMissing"));
+			if (!bAuto) {
+				MessageToast.show(this._getText("backendContextMissing"));
+			}
 			return;
 		}
 		try {
 			const aCroquis = await this._readCroquisAttachments();
 			if (aCroquis.length === 0) {
-				MessageToast.show(this._getText("noCroquisFound"));
+				// Chargement automatique silencieux : ne pas alerter s'il n'y a pas
+				// encore de croquis pour l'opération.
+				if (!bAuto) {
+					MessageToast.show(this._getText("noCroquisFound"));
+				}
 				return;
 			}
 			const oFileResp = await fetch(aCroquis[0].Url, { credentials: "same-origin" });
@@ -763,9 +805,10 @@ export default class DrawingBoard extends Control {
 		const sMode = oItem.getKey() as DrawMode;
 		this._state.mode = sMode;
 
-		// Chaque changement de mode repart d'une zone vierge : le mode photo commence
-		// vide (aucune photo, aucun dessin) et le mode dessin retrouve son trait bleu.
-		this._resetCanvasState();
+		// Le travail en cours est conservé lors d'un changement de mode : les formes
+		// sont en coordonnées monde (indépendantes du mode), donc basculer dessin ⇄
+		// photo n'efface plus ni les tracés, ni la photo, ni l'historique. Seule la
+		// couleur de trait par défaut s'adapte au mode.
 		this._state.strokeColor = sMode === "photo" ? "#ffffff" : "#0d47a1";
 		if (this._colorPopover) {
 			this._colorPopover.setDefaultColor(this._state.strokeColor);
@@ -1834,6 +1877,9 @@ export default class DrawingBoard extends Control {
 		}
 
 		this._resizeCanvas();
+
+		// Le tableau est monté et dimensionné : tenter le chargement auto du croquis.
+		this._maybeAutoLoadCroquis();
 	}
 
 	private _detachCanvasListeners(oCanvas: HTMLCanvasElement | null): void {

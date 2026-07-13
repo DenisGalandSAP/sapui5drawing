@@ -26,3 +26,12 @@
 	display: block;
 	cursor: crosshair;
 }
+
+/* Barre d'outils à retour à la ligne : les contrôles s'alignent sur une seule
+   ligne quand la largeur suffit, puis débordent sur une 2e (voire 3e) ligne. */
+.drawingShell .dbToolbar {
+	flex: 0 0 auto;
+	gap: 0.25rem 0.5rem;
+	padding: 0.25rem 0 0.5rem 0;
+	align-content: flex-start;
+}

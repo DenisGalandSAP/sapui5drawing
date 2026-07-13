@@ -86,11 +86,13 @@ The board can save/load the drawing straight to SAP as an attachment (OData serv
 ```
 
 The controller sets `context>/objid` to the notification number (for the standalone
-harness it is hardcoded to a test notification). The **☁ Load** / **💾 Save** toolbar
-buttons then read/write the croquis for that object. This needs the app to run
-same-origin with the ABAP server (deployed BSP, or `npm start` which proxies `/sap`);
-attachments are stored per `sap-client`. Full details — request flow, single-version
-overwrite, requirements — are in [`library/README.md` §7](library/README.md).
+harness it is hardcoded to a test notification). Once `objid` is set the board
+**auto-loads** the croquis on open (silent if none exists); the **☁ Load** / **💾 Save**
+toolbar buttons also read/write it manually, and a host can trigger a save in code via
+`oBoard.saveCroquis()` (e.g. on popup close). This needs the app to run same-origin with
+the ABAP server (deployed BSP, or `npm start` which proxies `/sap`); attachments are
+stored per `sap-client`. Full details — request flow, single-version overwrite,
+requirements — are in [`library/README.md` §7](library/README.md).
 
 ### Starting the app
 

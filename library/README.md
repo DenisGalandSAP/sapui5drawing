@@ -17,7 +17,12 @@ model, no wiring required.
   coordinates) in a hidden metadata chunk; reopen it later to keep editing.
 - **Backend croquis** — optionally load / save the drawing straight to SAP as an
   attachment (via the `ZTS_CA_UI5F_ATTA` OData service), keyed by an object id such
-  as a notification number — no local file step. See §7.
+  as a notification number — no local file step. The board **auto-loads** the croquis
+  when it opens, and a host app can trigger a save itself with `saveCroquis()`. See §7.
+- **Responsive toolbar** — the toolbar controls sit on one row when there is room and
+  **wrap** onto extra rows as the width shrinks.
+- **Non-destructive mode switch** — toggling *Canvas* ⇄ *Photo* keeps the current
+  drawing, photo and undo history.
 
 ---
 
@@ -280,18 +285,38 @@ oBoard.setOtype("CROQ");
 oBoard.setObjid("000010000020");   // e.g. the notification number (QMNUM)
 ```
 
-The control is self-contained: it builds and manages its own toolbar, canvas,
-history and file dialogs. There are currently no public events or a
-shapes-getter API — persistence is done through the PNG export (§6) or, when a
-backend context is set, through the attachment service (§7).
+### Public methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `setEditable(bEditable)` | `this` | Lock / unlock the board (view-only when `false`). |
+| `setOtype(sOtype)` / `setObjid(sObjid)` | `this` | Set the backend context at runtime (§7). |
+| `saveCroquis()` | `Promise<void>` | Save the current drawing to the backend — identical to the **💾 Save** button. Lets a host trigger the save **itself**, e.g. from a dialog's *Close* / *OK* handler so nothing is lost when the user leaves a popup without pressing Save. |
+| `loadCroquis()` | `Promise<void>` | (Re)load the croquis for the current `otype`/`objid` from the backend — identical to the **☁ Load** button. |
+
+```ts
+// e.g. persist when a hosting dialog closes, even if the user didn't press Save
+oDialog.attachAfterClose(() => { void oBoard.saveCroquis(); });
+```
+
+> **Auto-load on open** — once the board is rendered and **both** `otype` and `objid`
+> are set, it **loads the croquis automatically** (no **☁ Load** press needed). This
+> runs once and stays silent if no croquis exists yet for the object.
+
+The control is otherwise self-contained: it builds and manages its own toolbar, canvas,
+history and file dialogs. Beyond the methods above, persistence is done through the PNG
+export (§6) or, when a backend context is set, through the attachment service (§7).
 
 ---
 
 ## 5. What the user can do
 
+> The toolbar is **responsive**: its controls sit on a single row when there is room
+> and wrap onto a 2nd (then 3rd…) row automatically as the width shrinks.
+
 | Toolbar group | Actions |
 |---|---|
-| **Mode** | Switch between *Canvas* (grid) and *Photo* (annotate an image). |
+| **Mode** | Switch between *Canvas* (grid) and *Photo* (annotate an image). **Your current drawing, photo and history are kept** when you switch modes. |
 | **Photo** (Photo mode) | Add an image by **upload**, **camera** (choose the device), or **drag-and-drop** onto the canvas. Drawing tools stay disabled until an image is present. |
 | **Tools** | Pen, line, rectangle, circle, **select**, pan. |
 | **Color** | Pick the stroke color (defaults to white in Photo mode). Applies to new strokes and to the current selection. |
@@ -427,6 +452,13 @@ only when `editable` is `true` **and** both `otype` and `objid` are set.
   then uploads the new one under the deterministic file name `"<objid>-croquis.png"`.
 - **☁ Load** fetches that croquis back and opens it — the embedded `zabDrawProject`
   chunk is restored, so you keep full vector editing.
+- **Auto-load on open** — once the board is rendered and both `otype`/`objid` are set,
+  it loads the croquis automatically (no **☁ Load** press needed). It runs once and is
+  silent when there is no croquis yet for the object.
+- **Trigger from your app** — call `oBoard.saveCroquis()` / `oBoard.loadCroquis()`
+  (both return a `Promise`) to drive save/load yourself — e.g. save on a dialog's
+  *Close* handler so a croquis edited inside a popup isn't lost when the user leaves
+  without pressing **💾 Save**.
 
 ### How it talks to the service
 
