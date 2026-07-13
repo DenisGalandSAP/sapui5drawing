@@ -5,6 +5,7 @@ import Event from "sap/ui/base/Event";
 import FlexBox from "sap/m/FlexBox";
 import Title from "sap/m/Title";
 import Label from "sap/m/Label";
+import Text from "sap/m/Text";
 import Button from "sap/m/Button";
 import Slider from "sap/m/Slider";
 import Select from "sap/m/Select";
@@ -1049,13 +1050,63 @@ export default class DrawingBoard extends Control {
 	}
 
 	private _onClear(): void {
-		if (this._state.shapes.length === 0) {
+		const bHasShapes = this._state.shapes.length > 0;
+		const bHasPhoto = !!(this._bgImage && this._bgRect);
+		if (!bHasShapes && !bHasPhoto) {
 			return;
 		}
+		// Une photo est présente : demander si l'effacement doit aussi la retirer,
+		// ou ne toucher qu'aux tracés.
+		if (bHasPhoto) {
+			this._confirmClearWithPhoto(bHasShapes);
+			return;
+		}
+		// Aucune photo : effacer directement les tracés.
+		this._applyClear(false);
+	}
+
+	/** Dialogue de choix : effacer les tracés seuls, ou les tracés ET la photo. */
+	private _confirmClearWithPhoto(bHasShapes: boolean): void {
+		const oDialog = new Dialog({
+			title: this._getText("clearDialogTitle"),
+			type: "Message",
+			content: [new Text({ text: this._getText("clearDialogMessage") })],
+			buttons: [
+				new Button({
+					text: this._getText("clearDrawingsOnly"),
+					// Rien à effacer côté tracés : proposer seulement le retrait photo.
+					enabled: bHasShapes,
+					press: () => { oDialog.close(); this._applyClear(false); }
+				}),
+				new Button({
+					text: this._getText("clearAllWithPhoto"),
+					type: "Reject",
+					press: () => { oDialog.close(); this._applyClear(true); }
+				}),
+				new Button({
+					text: this._getText("cancel"),
+					press: () => oDialog.close()
+				})
+			],
+			afterClose: () => oDialog.destroy()
+		});
+		this.addDependent(oDialog);
+		oDialog.open();
+	}
+
+	/** Efface les tracés (et, si demandé, la photo de fond), puis repeint. */
+	private _applyClear(bAlsoPhoto: boolean): void {
 		this._pushHistory();
 		this._state.shapes = [];
 		this._state.draft = null;
 		this._state.selectedShapeId = null;
+		if (bAlsoPhoto) {
+			// Note : l'historique ne mémorise que les tracés ; le retrait de la photo
+			// n'est donc pas annulable (Annuler restaure les tracés, pas la photo).
+			this._bgImage = null;
+			this._bgRect = null;
+			this._applyMode();
+		}
 		this._render();
 		MessageToast.show(this._getText("canvasCleared"));
 	}
@@ -1227,6 +1278,10 @@ export default class DrawingBoard extends Control {
 
 	/** Construit l'objet projet sérialisable pour le PNG. */
 	private _serializeProject(iWidth: number, iHeight: number): DrawProject {
+		// La photo fait partie du croquis dès qu'elle existe en mémoire, même si la
+		// vue est repassée sur le canevas (où elle est simplement masquée). On la
+		// persiste donc indépendamment du mode courant, afin qu'un enregistrement
+		// fait depuis le canevas ne « perde » pas la photo.
 		const bHasImage = !!(this._bgImage && this._bgRect);
 		const aShapes = this._state.shapes.map((oShape) => {
 			return bHasImage ? this._convertShape(oShape, true) : this._cloneShape(oShape);
@@ -1245,7 +1300,9 @@ export default class DrawingBoard extends Control {
 		return {
 			type: "zab.be.resa.draw.project",
 			version: 1,
-			mode: this._state.mode,
+			// Un croquis qui porte une photo se rouvre en mode photo pour que la photo
+			// soit visible au rechargement (sinon le canevas la masquerait).
+			mode: bHasImage ? "photo" : this._state.mode,
 			strokeColor: this._state.strokeColor,
 			coordinateSpace: bHasImage ? "image-pixels" : "world",
 			width: iWidth,
@@ -1284,6 +1341,8 @@ export default class DrawingBoard extends Control {
 	 * tracés (mode photo), ou tracés sur fond blanc en coordonnées monde à défaut.
 	 */
 	private _buildCompositeCanvas(): HTMLCanvasElement | null {
+		// Le composite intègre la photo dès qu'elle existe (même si la vue est sur le
+		// canevas, qui la masque) : l'enregistrement conserve toujours la photo.
 		if (this._bgImage && this._bgRect) {
 			const iW = this._bgImage.naturalWidth;
 			const iH = this._bgImage.naturalHeight;
@@ -2583,7 +2642,10 @@ export default class DrawingBoard extends Control {
 		this._ctx.translate(this._state.panX, this._state.panY);
 		this._ctx.scale(this._state.zoom, this._state.zoom);
 
-		if (this._bgImage && this._bgRect) {
+		// La photo n'est peinte qu'en mode photo : de retour sur le canevas, elle
+		// reste en mémoire (le rebasculement en mode photo la réaffiche) mais
+		// n'apparaît pas sous les tracés.
+		if (this._state.mode === "photo" && this._bgImage && this._bgRect) {
 			this._ctx.drawImage(this._bgImage, this._bgRect.x, this._bgRect.y, this._bgRect.w, this._bgRect.h);
 		}
 

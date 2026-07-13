@@ -452,6 +452,9 @@ only when `editable` is `true` **and** both `otype` and `objid` are set.
   then uploads the new one under the deterministic file name `"<objid>-croquis.png"`.
 - **☁ Load** fetches that croquis back and opens it — the embedded `zabDrawProject`
   chunk is restored, so you keep full vector editing.
+- **The photo is always kept** — once a photo has been added, it's part of the saved
+  croquis even if you switch to the Canvas view (where it's hidden while drawing). The
+  croquis then **reopens in Photo mode** so the photo is visible again on load.
 - **Auto-load on open** — once the board is rendered and both `otype`/`objid` are set,
   it loads the croquis automatically (no **☁ Load** press needed). It runs once and is
   silent when there is no croquis yet for the object.
