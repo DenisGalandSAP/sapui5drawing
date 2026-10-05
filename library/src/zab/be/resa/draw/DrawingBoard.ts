@@ -649,6 +649,23 @@ export default class DrawingBoard extends Control {
 	}
 
 	/**
+	 * Ramène une URL renvoyée par le backend (ex. `Url` d'une pièce jointe, absolue
+	 * `/sap/...` ou `http(s)://hôte/sap/...`) sous le même préfixe que `serviceUrl`.
+	 * Sur SAP BTP / Work Zone, le backend n'est joignable qu'au travers de la route
+	 * `/sap` de l'application (ex. `/<service>.<app>/sap/...`) ; sur ABAP, le
+	 * préfixe est vide et l'URL est inchangée.
+	 */
+	private _toServiceRelativeUrl(sUrl: string): string {
+		const sBase = this._getServiceBase();
+		const iBaseSap = sBase.indexOf("/sap/");
+		const iUrlSap = sUrl.indexOf("/sap/");
+		if (iBaseSap < 0 || iUrlSap < 0) {
+			return sUrl;
+		}
+		return sBase.substring(0, iBaseSap) + sUrl.substring(iUrlSap);
+	}
+
+	/**
 	 * Nom du fichier croquis : `<objid>-croquis.png`. Déterministe (pas d'horodatage)
 	 * car il n'existe qu'une seule version du croquis par objet (numéro d'avis).
 	 */
@@ -777,7 +794,7 @@ export default class DrawingBoard extends Control {
 				}
 				return;
 			}
-			const oFileResp = await fetch(aCroquis[0].Url, { credentials: "same-origin" });
+			const oFileResp = await fetch(this._toServiceRelativeUrl(aCroquis[0].Url), { credentials: "same-origin" });
 			if (!oFileResp.ok) {
 				MessageToast.show(this._getText("loadCroquisError") + " : " + await this._httpErrorText(oFileResp));
 				return;

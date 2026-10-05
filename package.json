@@ -32,7 +32,10 @@
     "deploy-lib": "npm run build:lib && cd library && fiori deploy --config ui5-deploy.yaml -y && rimraf archive.zip",
     "deploy-config": "fiori add deploy-config",
     "undeploy": "fiori undeploy --config ui5-deploy.yaml",
-    "deploy-test": "npm run build:app && fiori deploy --config ui5-deploy.yaml --testMode true"
+    "deploy-test": "npm run build:app && fiori deploy --config ui5-deploy.yaml --testMode true",
+    "build:mta": "rimraf resources mta_archives && mbt build",
+    "deploy:cf": "npm run build:mta && cf deploy mta_archives/zabberesadraw_0.0.2.mtar -f",
+    "undeploy:cf": "cf undeploy zabberesadraw --delete-services --delete-service-keys --delete-service-brokers"
   },
   "sapuxLayer": "CUSTOMER_BASE",
   "ui5": {

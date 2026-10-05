@@ -1,0 +1,7 @@
+{
+  "xsappname": "zabberesadraw",
+  "tenant-mode": "dedicated",
+  "description": "Security profile of the drawing board app and library",
+  "scopes": [],
+  "role-templates": []
+}

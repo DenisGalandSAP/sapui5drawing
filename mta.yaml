@@ -1,0 +1,108 @@
+_schema-version: "3.2"
+ID: zabberesadraw
+description: Drawing board app + reusable library zab.be.resa.draw (HTML5 repo, managed approuter / Work Zone)
+version: 0.0.2
+modules:
+  # Destinations du « business service » zabberesadraw (managed approuter / Work Zone).
+  - name: zabberesadraw-destination-content
+    type: com.sap.application.content
+    requires:
+      - name: zabberesadraw-destination-service
+        parameters:
+          content-target: true
+      - name: zabberesadraw-repo-host
+        parameters:
+          service-key:
+            name: zabberesadraw-repo-host-key
+      - name: zabberesadraw-uaa
+        parameters:
+          service-key:
+            name: zabberesadraw-uaa-key
+    parameters:
+      content:
+        instance:
+          destinations:
+            - Name: zabberesadraw_html_repo_host
+              ServiceInstanceName: zabberesadraw-html5-service
+              ServiceKeyName: zabberesadraw-repo-host-key
+              sap.cloud.service: zabberesadraw
+            - Authentication: OAuth2UserTokenExchange
+              Name: zabberesadraw_uaa
+              ServiceInstanceName: zabberesadraw-xsuaa-service
+              ServiceKeyName: zabberesadraw-uaa-key
+              sap.cloud.service: zabberesadraw
+          existing_destinations_policy: update
+    build-parameters:
+      no-source: true
+  # Upload de l'app et de la bibliothèque dans le même app-host.
+  - name: zabberesadraw-app-content
+    type: com.sap.application.content
+    path: .
+    requires:
+      - name: zabberesadraw-repo-host
+        parameters:
+          content-target: true
+    build-parameters:
+      build-result: resources
+      requires:
+        - artifacts:
+            - zabberesadraw.zip
+          name: zabberesadraw
+          target-path: resources/
+        - artifacts:
+            - zabberesazuidrawapp.zip
+          name: zabberesazuidrawapp
+          target-path: resources/
+  - name: zabberesadraw
+    type: html5
+    path: library
+    build-parameters:
+      build-result: dist
+      builder: custom
+      commands:
+        - npx ui5 build --config ui5-cf.yaml --clean-dest --dest dist
+      supported-platforms: []
+  - name: zabberesazuidrawapp
+    type: html5
+    path: .
+    build-parameters:
+      build-result: dist
+      builder: custom
+      commands:
+        - npx ui5 build preload --config ui5-cf.yaml --clean-dest --dest dist --include-task=generateCachebusterInfo
+      supported-platforms: []
+resources:
+  - name: zabberesadraw-destination-service
+    type: org.cloudfoundry.managed-service
+    parameters:
+      config:
+        HTML5Runtime_enabled: true
+        init_data:
+          instance:
+            destinations:
+              - Authentication: NoAuthentication
+                Name: ui5
+                ProxyType: Internet
+                Type: HTTP
+                URL: https://ui5.sap.com
+            existing_destinations_policy: update
+        version: 1.0.0
+      service: destination
+      service-name: zabberesadraw-destination-service
+      service-plan: lite
+  - name: zabberesadraw-uaa
+    type: org.cloudfoundry.managed-service
+    parameters:
+      path: ./xs-security.json
+      service: xsuaa
+      service-name: zabberesadraw-xsuaa-service
+      service-plan: application
+  - name: zabberesadraw-repo-host
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-name: zabberesadraw-html5-service
+      service-plan: app-host
+parameters:
+  deploy_mode: html5-repo
+  enable-parallel-deployments: true

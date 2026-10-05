@@ -56,7 +56,9 @@
         "sap.m": {},
         "sap.ui.core": {},
         "sap.uxap": {},
-        "zab.be.resa.draw": {}
+        "zab.be.resa.draw": {
+          "lazy": true
+        }
       }
     },
     "contentDensities": {
@@ -81,5 +83,9 @@
       "async": true,
       "id": "Main"
     }
+  },
+  "sap.cloud": {
+    "public": true,
+    "service": "zabberesadraw"
   }
 }

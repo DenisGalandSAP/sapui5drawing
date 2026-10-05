@@ -12,7 +12,8 @@
     "@sapui5/types": "~1.142.0",
     "@ui5/cli": "^4.0.43",
     "typescript": "^5.4.5",
-    "ui5-tooling-transpile": "^3.11.3"
+    "ui5-tooling-transpile": "^3.11.3",
+    "ui5-task-zipper": "^3.5.1"
   },
   "scripts": {
     "build": "ui5 build --config ./ui5.yaml --clean-dest --dest dist",
@@ -20,7 +21,8 @@
   },
   "ui5": {
     "dependencies": [
-      "ui5-tooling-transpile"
+      "ui5-tooling-transpile",
+      "ui5-task-zipper"
     ]
   }
 }

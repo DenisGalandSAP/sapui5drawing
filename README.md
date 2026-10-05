@@ -87,3 +87,32 @@ Deploy the library first so the app can resolve `/resources/zab/be/resa/draw` at
 #### Pre-requisites:
 
 1. Active NodeJS LTS (Long Term Support) version and associated supported NPM version.  (See https://nodejs.org)
+
+### Deploying to SAP BTP (Work Zone dev)
+
+One MTA (`mta.yaml`, ID `zabberesadraw`) deploys **both** the library and the app to the
+HTML5 Application Repository (managed approuter, business service `zabberesadraw`):
+
+```
+cf target -o <org> -s <space>    # Work Zone dev subaccount / space
+npm run deploy:cf      # mbt build + cf deploy
+npm run undeploy:cf    # remove the MTA and its services
+```
+
+- Library build: `library/ui5-cf.yaml` → `zabberesadraw.zip` (+ `library/xs-app.json`).
+- App build: `ui5-cf.yaml` → `zabberesazuidrawapp.zip` (+ `xs-app.json`: `/sap` → destination
+  `erp`, `/resources` → ui5.sap.com).
+- The app declares the library `lazy` and `Component.ts` loads it from the same app-host,
+  deriving its URL from the app's own URL (`…zabberesadraw.zabberesazuidrawapp/` →
+  `…zabberesadraw.zabberesadraw/`); locally it falls back to `/resources/zab/be/resa/draw`.
+- The croquis OData URL is app-relative (`<app>/sap/opu/odata/sap/ZTS_CA_UI5F_ATTA`), so it goes
+  through the app's `/sap` route.
+
+Standalone test URL (destinations are instance-level, hence the destination-service instance
+GUID prefix):
+
+```
+https://<subdomain>.launchpad.cfapps.<region>.hana.ondemand.com/<destination-instance-guid>.zabberesadraw.zabberesazuidrawapp/index.html
+```
+
+`<destination-instance-guid>` = `cf service zabberesadraw-destination-service --guid`.
