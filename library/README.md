@@ -30,7 +30,7 @@ model, no wiring required.
 
 | | |
 |---|---|
-| SAPUI5 | 1.71 or newer |
+| SAPUI5 | 1.71 or newer (the `BTP` branch builds against 1.142) |
 | Library dependencies | `sap.ui.core`, `sap.m` |
 | Secure context | Camera capture needs `https://` or `localhost` (browser rule) |
 
@@ -139,6 +139,37 @@ server:
 When the library is **not** deployed as its own BSP on the app's server (e.g. you copy it
 into the app, or host it on a static server / CDN), give `resourceRoots` a value that
 points at the folder containing the library files directly.
+
+### Scenario D — SAP BTP, HTML5 Application Repository (managed approuter)
+
+On BTP the library is deployed as its own HTML5 app (`zabberesadraw`) in the **same
+app-host** as the consuming app (one MTA, one business service — see the root
+`mta.yaml`). The app URL then looks like
+`/[<destination-instance-guid>.]<service>.<appname>[-<version>]/…`, and the library
+sits next to it under the same prefix: `/[<guid>.]<service>.zabberesadraw/`.
+
+Because that prefix isn't known in advance, **don't use a static `resourceRoots`**.
+Declare the library `lazy` and load it in the component before the view is created:
+
+```json
+"zab.be.resa.draw": { "lazy": true }
+```
+
+```ts
+// Component.ts — metadata: interfaces: ["sap.ui.core.IAsyncContentCreation"]
+public createContent(): Promise<Control> {
+	const sAppPath = new URL(sap.ui.require.toUrl("my/app/namespace") + "/", document.baseURI).pathname;
+	const oMatch = /^(.*\/)([^/]*?)myappname(?:-[^/]*)?\//.exec(sAppPath);
+	const sUrl = oMatch ? oMatch[1] + oMatch[2] + "zabberesadraw/" : "/resources/zab/be/resa/draw/";
+	return Lib.load({ name: "zab.be.resa.draw", url: sUrl })
+		.then(() => super.createContent() as Control | Promise<Control>);
+}
+```
+
+(`myappname` = your `sap.app.id` without dots; the fallback is for local dev.) The
+library's own HTML5 app needs an `xs-app.json` with a catch-all
+`html5-apps-repo-rt` route; build it with `ui5-task-zipper` **after `buildThemes`**.
+For the croquis service on BTP, also see §7 (*app-relative `serviceUrl`*).
 
 ### How `resourceRoots` works
 
@@ -439,7 +470,13 @@ directly to SAP as an **attachment**, with no local file step. It is driven by t
   notification *or* an order — when you start from an order, resolve its notification
   (`AFIH-QMNUM`) and pass that `QMNUM` as `objid`.
 - `serviceUrl` — defaults to `/sap/opu/odata/sap/ZTS_CA_UI5F_ATTA`; override only if the
-  attachment service lives elsewhere.
+  attachment service lives elsewhere. **On SAP BTP (managed approuter) set it
+  app-relative**, so the call goes through the app's own `/sap` route:
+  `sap.ui.require.toUrl("<app/namespace>") + "/sap/opu/odata/sap/ZTS_CA_UI5F_ATTA"`.
+  The attachment download URL returned by SAP (`/sap/opu/…/$value`) is rewritten by the
+  board under the same prefix as `serviceUrl` (no-op on ABAP, where the prefix is empty).
+- Key format — `objid` must match **exactly** what was stored: croquis saved by the
+  host apps use the notification number **without leading zeros** (e.g. `420004467`).
 
 The two buttons (**☁ Load**, **💾 Save**) sit at the end of the toolbar and are enabled
 only when `editable` is `true` **and** both `otype` and `objid` are set.
@@ -486,7 +523,8 @@ and the SAP message.
   token apply — a deployed BSP app, or a dev server that proxies `/sap` (this repo's
   `ui5.yaml`). The `slug` file name must be ASCII.
 - Attachments are stored **per client**: check the `sap-client` you run on when
-  verifying the row in `ztca_ui5f_atta`.
+  verifying the row in `ztca_ui5f_atta`. On BTP the client is fixed by the
+  destination (`erp` → DTA **310**); a `?sap-client=` in the URL is ignored.
 - A successful `POST` returns `201` with an **empty** entity body (`Otype=''`,
   `Attid='000000'`) — that is normal here; the backend clears its context before
   building the response. The row is still inserted.
