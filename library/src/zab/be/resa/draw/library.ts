@@ -10,7 +10,7 @@ import Core from "sap/ui/core/Core";
  */
 Core.initLibrary({
 	name: "zab.be.resa.draw",
-	version: "0.0.1",
+	version: "0.0.2",
 	dependencies: ["sap.ui.core", "sap.m"],
 	types: [],
 	interfaces: [],

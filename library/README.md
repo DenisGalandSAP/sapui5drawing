@@ -15,6 +15,14 @@ model, no wiring required.
 - **Save / reopen** — download a single PNG that shows the annotated image *and*
   carries the re-editable project (image + vector lines in image-pixel
   coordinates) in a hidden metadata chunk; reopen it later to keep editing.
+- **Backend croquis** — optionally load / save the drawing straight to SAP as an
+  attachment (via the `ZTS_CA_UI5F_ATTA` OData service), keyed by an object id such
+  as a notification number — no local file step. The board **auto-loads** the croquis
+  when it opens, and a host app can trigger a save itself with `saveCroquis()`. See §7.
+- **Responsive toolbar** — the toolbar controls sit on one row when there is room and
+  **wrap** onto extra rows as the width shrinks.
+- **Non-destructive mode switch** — toggling *Canvas* ⇄ *Photo* keeps the current
+  drawing, photo and undo history.
 
 ---
 
@@ -28,13 +36,109 @@ model, no wiring required.
 
 ---
 
-## 2. Reference the library from another app (`manifest.json`)
+## 2. Reference the library from another app
 
-This library is **not** on `ui5.sap.com`, so a consuming app has to tell UI5 two
-things in its own `manifest.json`:
+Every consuming app must declare the dependency — under `sap.ui5/dependencies/libs`
+in its `manifest.json`:
 
-1. **that it depends on the library** — under `sap.ui5/dependencies/libs`, and
-2. **where the library's files live** — under `sap.ui5/resourceRoots`.
+```json
+{
+  "sap.ui5": {
+    "dependencies": {
+      "minUI5Version": "1.71.58",
+      "libs": {
+        "sap.ui.core": {},
+        "sap.m": {},
+        "zab.be.resa.draw": {}
+      }
+    }
+  }
+}
+```
+
+Whether you *also* need `resourceRoots` (to tell UI5 **where** the files live) depends
+on how the app and the library are hosted. Pick the scenario that matches you:
+
+### Scenario A — Deployed app on the same ABAP server (no `resourceRoots` needed)
+
+If your consuming app is deployed as a BSP on the **same** ABAP front-end server where
+the library BSP (`ZUIABLIBRDRAW`) lives, you need **only** the `dependencies/libs` entry
+above. The SAPUI5 **application index** resolves the `zab.be.resa.draw` namespace to the
+library BSP automatically — **do not add a `resourceRoots` block**.
+
+> Real example in this landscape: `ZUI_AB_UI5F_AP` consumes the reuse library
+> `zab.be.resa.zuiablibrleaf` with a plain `dependencies/libs` entry and **no**
+> `resourceRoots`.
+
+Prerequisites:
+
+- Deploy the library BSP **first** (`npm run deploy-lib` → `ZUIABLIBRDRAW`), then the app.
+- The app index must be current. It is normally recalculated on deploy; if the library
+  isn't found, run `/UI5/APP_INDEX_CALCULATE` (report `/UI5/APP_INDEX_CALCULATE`) on the
+  ABAP system.
+
+### Scenario B — Local development of a consumer app
+
+While developing locally with the UI5 tooling, the app index isn't available, so map the
+namespace explicitly and serve the files. Point `resourceRoots` at the library's BSP
+path and then either:
+
+- **(b1) serve it from a built `library/dist`** with `fiori-tools-servestatic` — this is
+  what this repo's `ui5-local.yaml` does (fully offline), or
+- **(b2) proxy `/sap` to the ABAP server** so the deployed BSP is fetched live — this is
+  what this repo's `ui5.yaml` does.
+
+Shared bootstrap mapping (in `index.html` / `flpSandbox.html`, absolute so it also works
+for a standalone launch of a deployed app):
+
+```html
+data-sap-ui-resourceroots='{
+    "your.consumer.app": "./",
+    "zab.be.resa.draw": "/sap/bc/ui5_ui5/sap/zuiablibrdraw/resources/zab/be/resa/draw"
+}'
+```
+
+`ui5-local.yaml` (b1 — serve the built library statically under the BSP path, **before**
+the proxy):
+
+```yaml
+server:
+  customMiddleware:
+    - name: fiori-tools-servestatic
+      afterMiddleware: compression
+      configuration:
+        paths:
+          - path: /sap/bc/ui5_ui5/sap/zuiablibrdraw/resources/zab/be/resa/draw
+            src: "library/dist/resources/zab/be/resa/draw"
+    - name: fiori-tools-proxy
+      afterMiddleware: fiori-tools-servestatic   # after servestatic, so BSP path is local
+      configuration:
+        backend:
+          - path: /sap
+            url: http://<abap-host>:<port>
+```
+
+`ui5.yaml` (b2 — no servestatic; the proxy fetches the live BSP):
+
+```yaml
+server:
+  customMiddleware:
+    - name: fiori-tools-proxy
+      afterMiddleware: compression
+      configuration:
+        ui5:
+          path: [/resources, /test-resources]
+          url: https://ui5.sap.com
+        backend:
+          - path: /sap
+            url: http://<abap-host>:<port>
+```
+
+### Scenario C — Bundle the library into the app, or host it elsewhere
+
+When the library is **not** deployed as its own BSP on the app's server (e.g. you copy it
+into the app, or host it on a static server / CDN), give `resourceRoots` a value that
+points at the folder containing the library files directly.
 
 ### How `resourceRoots` works
 
@@ -80,8 +184,12 @@ The `resourceRoots` **value** is what changes per setup:
 | Where the library is hosted | `resourceRoots` value |
 |---|---|
 | Copied inside your app (e.g. `webapp/thirdparty/zab/be/resa/draw`) | `"./thirdparty/zab/be/resa/draw"` (relative to the app's `Component`/`webapp` root) |
-| Deployed as its own ABAP BSP (e.g. `ZUI_AB_LIBR_DRAW`) | `"/sap/bc/ui5_ui5/sap/zui_ab_libr_draw/resources/zab/be/resa/draw"` |
+| Deployed as its own ABAP BSP (`ZUIABLIBRDRAW`) | `"/sap/bc/ui5_ui5/sap/zuiablibrdraw/resources/zab/be/resa/draw"` |
 | Any static host / CDN | `"https://host/path/to/resources/zab/be/resa/draw"` |
+
+> For a BSP-deployed library consumed by a **deployed** app on the **same** server,
+> prefer Scenario A (no `resourceRoots`). The absolute BSP value above is for local dev
+> (Scenario B) or a standalone launch.
 
 > A **relative** value is resolved against the consuming app, so it survives being
 > deployed under different server prefixes — prefer it when you bundle the library
@@ -102,34 +210,9 @@ npm run build:lib     # -> library/dist/resources/zab/be/resa/draw
 - **Deploy separately:** deploy that same folder as its own BSP / static app and
   use the absolute value.
 
-### Local dev shortcut (UI5 tooling)
-
-If you don't want to copy files while developing, you can instead serve the built
-`dist` folder statically from the dev server and skip `resourceRoots` entirely —
-this is what the sample app in this repo does. In the app's `ui5.yaml`:
-
-```yaml
-server:
-  customMiddleware:
-    - name: fiori-tools-servestatic
-      afterMiddleware: compression
-      configuration:
-        paths:
-          - path: /resources/zab/be/resa/draw
-            src: "library/dist/resources/zab/be/resa/draw"
-    # IMPORTANT: register the UI5 proxy AFTER servestatic so this path is served
-    # locally and not forwarded to ui5.sap.com.
-    - name: fiori-tools-proxy
-      afterMiddleware: fiori-tools-servestatic
-      configuration:
-        ui5:
-          path: [/resources, /test-resources]
-          url: https://ui5.sap.com
-```
-
-Here the library is reachable under the standard `/resources/zab/be/resa/draw`, so
-only the `dependencies/libs` entry is needed (no `resourceRoots`). For a
-**deployed** app, use `resourceRoots` as shown above.
+For the UI5-tooling dev-server recipes (serve from `library/dist` statically, or proxy
+`/sap` to the ABAP server), see **Scenario B** above — that is what this repo's
+`ui5-local.yaml` and `ui5.yaml` do respectively.
 
 ---
 
@@ -180,6 +263,9 @@ this.getView().byId("page").addContent(oBoard);
 | `editable` | `boolean` | `true` | When `false`, the toolbar and pointer interactions are disabled (view-only). |
 | `width` | `sap.ui.core.CSSSize` | `"100%"` | Width of the control. |
 | `height` | `sap.ui.core.CSSSize` | `"100%"` | Height of the control. |
+| `serviceUrl` | `string` | `"/sap/opu/odata/sap/ZTS_CA_UI5F_ATTA"` | Base URL of the attachment OData service used by the croquis Load/Save buttons (§7). |
+| `otype` | `string` | `""` | Attachment object type. For a croquis: `"CROQ"`. |
+| `objid` | `string` | `""` | Attachment object id = the storage key of the croquis (e.g. the notification number `QMNUM`). The croquis Load/Save buttons are enabled only when **both** `otype` and `objid` are set. |
 
 ```xml
 <draw:DrawingBoard editable="{= ${ui>/mode} === 'edit' }" height="80vh" />
@@ -192,17 +278,45 @@ oBoard.setEditable(false);   // lock (view-only)
 oBoard.setEditable(true);    // unlock
 ```
 
-The control is self-contained: it builds and manages its own toolbar, canvas,
-history and file dialogs. There are currently no public events or a
-shapes-getter API — persistence is done through the PNG export (see §7).
+Set the backend context at runtime too:
+
+```ts
+oBoard.setOtype("CROQ");
+oBoard.setObjid("000010000020");   // e.g. the notification number (QMNUM)
+```
+
+### Public methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `setEditable(bEditable)` | `this` | Lock / unlock the board (view-only when `false`). |
+| `setOtype(sOtype)` / `setObjid(sObjid)` | `this` | Set the backend context at runtime (§7). |
+| `saveCroquis()` | `Promise<void>` | Save the current drawing to the backend — identical to the **💾 Save** button. Lets a host trigger the save **itself**, e.g. from a dialog's *Close* / *OK* handler so nothing is lost when the user leaves a popup without pressing Save. |
+| `loadCroquis()` | `Promise<void>` | (Re)load the croquis for the current `otype`/`objid` from the backend — identical to the **☁ Load** button. |
+
+```ts
+// e.g. persist when a hosting dialog closes, even if the user didn't press Save
+oDialog.attachAfterClose(() => { void oBoard.saveCroquis(); });
+```
+
+> **Auto-load on open** — once the board is rendered and **both** `otype` and `objid`
+> are set, it **loads the croquis automatically** (no **☁ Load** press needed). This
+> runs once and stays silent if no croquis exists yet for the object.
+
+The control is otherwise self-contained: it builds and manages its own toolbar, canvas,
+history and file dialogs. Beyond the methods above, persistence is done through the PNG
+export (§6) or, when a backend context is set, through the attachment service (§7).
 
 ---
 
 ## 5. What the user can do
 
+> The toolbar is **responsive**: its controls sit on a single row when there is room
+> and wrap onto a 2nd (then 3rd…) row automatically as the width shrinks.
+
 | Toolbar group | Actions |
 |---|---|
-| **Mode** | Switch between *Canvas* (grid) and *Photo* (annotate an image). |
+| **Mode** | Switch between *Canvas* (grid) and *Photo* (annotate an image). **Your current drawing, photo and history are kept** when you switch modes. |
 | **Photo** (Photo mode) | Add an image by **upload**, **camera** (choose the device), or **drag-and-drop** onto the canvas. Drawing tools stay disabled until an image is present. |
 | **Tools** | Pen, line, rectangle, circle, **select**, pan. |
 | **Color** | Pick the stroke color (defaults to white in Photo mode). Applies to new strokes and to the current selection. |
@@ -211,6 +325,7 @@ shapes-getter API — persistence is done through the PNG export (see §7).
 | **Zoom** | Slider, reset view, wheel to zoom, pan tool to move the viewport. |
 | **History** | Undo / Redo (also **Ctrl+Z** / **Ctrl+Y** / **Ctrl+Shift+Z**). **Delete**/**Backspace** removes the selection. |
 | **Files** | **Open** a project (PNG/JSON) and **Download** the annotated PNG with embedded coordinates. |
+| **Backend** (croquis) | Only when `otype`+`objid` are set: **☁ Load croquis** pulls the saved croquis back into the board, and **💾 Save croquis** stores the current drawing as a SAP attachment. See §7. |
 
 To transform an object: pick the **Select** tool, click the drawing (a dashed
 box shows the selection), then move/resize/rotate/recolor/delete it.
@@ -302,7 +417,83 @@ async function readProjectFromPng(blob) {
 
 ---
 
-## 7. Notes & limitations
+## 7. Backend persistence — save/load a croquis as a SAP attachment
+
+Besides the local PNG download/open (§6), the board can load and save the drawing
+directly to SAP as an **attachment**, with no local file step. It is driven by the
+`otype` / `objid` properties and two extra toolbar buttons.
+
+### Wiring
+
+```xml
+<draw:DrawingBoard
+    editable="true"
+    height="70vh"
+    otype="CROQ"
+    objid="{context>/objid}" />
+```
+
+- `otype` — the attachment object type; for a croquis it is **`CROQ`**.
+- `objid` — the **storage key**: there is one croquis per `objid`. By spec the key is
+  the **notification number** (`QMEL-QMNUM`). The board may be entered from a
+  notification *or* an order — when you start from an order, resolve its notification
+  (`AFIH-QMNUM`) and pass that `QMNUM` as `objid`.
+- `serviceUrl` — defaults to `/sap/opu/odata/sap/ZTS_CA_UI5F_ATTA`; override only if the
+  attachment service lives elsewhere.
+
+The two buttons (**☁ Load**, **💾 Save**) sit at the end of the toolbar and are enabled
+only when `editable` is `true` **and** both `otype` and `objid` are set.
+
+### What the buttons do
+
+- **💾 Save** builds the composite PNG (photo + strokes, with the re-editable project
+  embedded exactly as in §6) and stores it on `otype`/`objid`. Because only **one
+  version** of a croquis exists, Save first deletes any existing croquis for that key,
+  then uploads the new one under the deterministic file name `"<objid>-croquis.png"`.
+- **☁ Load** fetches that croquis back and opens it — the embedded `zabDrawProject`
+  chunk is restored, so you keep full vector editing.
+- **The photo is always kept** — once a photo has been added, it's part of the saved
+  croquis even if you switch to the Canvas view (where it's hidden while drawing). The
+  croquis then **reopens in Photo mode** so the photo is visible again on load.
+- **Auto-load on open** — once the board is rendered and both `otype`/`objid` are set,
+  it loads the croquis automatically (no **☁ Load** press needed). It runs once and is
+  silent when there is no croquis yet for the object.
+- **Trigger from your app** — call `oBoard.saveCroquis()` / `oBoard.loadCroquis()`
+  (both return a `Promise`) to drive save/load yourself — e.g. save on a dialog's
+  *Close* handler so a croquis edited inside a popup isn't lost when the user leaves
+  without pressing **💾 Save**.
+
+### How it talks to the service
+
+The control calls the `ZTS_CA_UI5F_ATTA` OData V2 service directly (`fetch`, same
+origin, cookie session):
+
+| Step | Request |
+|---|---|
+| Read | `GET …/zv_ca_c_ui5f_atta_head(Otype='…',Objid='…')?$expand=to_Attachment` — the `to_Attachment` list is filtered to `*croquis*.png`. |
+| Save | `GET …/` with header `x-csrf-token: Fetch` → token, then `POST …/zv_ca_c_ui5f_atta_info` with headers `x-csrf-token` + `slug: <otype>&&<objid>&&<fileName>` and the raw PNG bytes. |
+| Overwrite | `DELETE …/zv_ca_c_ui5f_atta_info(Otype='…',Objid='…',Attid='…')` for each existing croquis before the POST. |
+
+On success the backend stores the row in table `ztca_ui5f_atta` (keyed by
+`otype/objid/attid/fname`). Errors surface in a `MessageToast` with the HTTP status
+and the SAP message.
+
+### Requirements & gotchas
+
+- The object type must be configured in the attachment customizing (max size, and the
+  allowed extensions must include `png`). `CROQ` is configured for this.
+- The app must run **same-origin** with the ABAP server so the session cookie and CSRF
+  token apply — a deployed BSP app, or a dev server that proxies `/sap` (this repo's
+  `ui5.yaml`). The `slug` file name must be ASCII.
+- Attachments are stored **per client**: check the `sap-client` you run on when
+  verifying the row in `ztca_ui5f_atta`.
+- A successful `POST` returns `201` with an **empty** entity body (`Otype=''`,
+  `Attid='000000'`) — that is normal here; the backend clears its context before
+  building the response. The row is still inserted.
+
+---
+
+## 8. Notes & limitations
 
 - **Rebuild after changes** — the app serves the built `library/dist`; run
   `npm run build:lib` after editing the library, and hard-refresh (the UI5

@@ -1,10 +1,10 @@
 import Control from "sap/ui/core/Control";
 import Core from "sap/ui/core/Core";
 import ResourceBundle from "sap/base/i18n/ResourceBundle";
-import OverflowToolbar from "sap/m/OverflowToolbar";
-import ToolbarSeparator from "sap/m/ToolbarSeparator";
+import FlexBox from "sap/m/FlexBox";
 import Title from "sap/m/Title";
 import Label from "sap/m/Label";
+import Text from "sap/m/Text";
 import Button from "sap/m/Button";
 import Slider, { Slider$LiveChangeEvent } from "sap/m/Slider";
 import Select, { Select$ChangeEvent } from "sap/m/Select";
@@ -173,11 +173,23 @@ export default class DrawingBoard extends Control {
 			/** Largeur du contrôle. */
 			width: { type: "sap.ui.core.CSSSize", defaultValue: "100%" },
 			/** Hauteur du contrôle. */
-			height: { type: "sap.ui.core.CSSSize", defaultValue: "100%" }
+			height: { type: "sap.ui.core.CSSSize", defaultValue: "100%" },
+			/**
+			 * URL de base du service OData de pièces jointes (ZTS_CA_UI5F_ATTA).
+			 * Sert au chargement / à l'enregistrement du croquis dans le backend.
+			 */
+			serviceUrl: { type: "string", defaultValue: "/sap/opu/odata/sap/ZTS_CA_UI5F_ATTA" },
+			/** Type d'objet (Otype) dans le système de pièces jointes (ex. « CROQ »). */
+			otype: { type: "string", defaultValue: "" },
+			/**
+			 * Identifiant d'objet (Objid) : clé de stockage du croquis dans le système
+			 * de pièces jointes. Pour un croquis, il s'agit du numéro d'avis (QMEL-QMNUM).
+			 */
+			objid: { type: "string", defaultValue: "" }
 		},
 		aggregations: {
-			/** Barre d'outils construite par le contrôle lui-même. */
-			_toolbar: { type: "sap.m.OverflowToolbar", multiple: false, visibility: "hidden" }
+			/** Conteneur de barre d'outils (FlexBox à retour à la ligne) construit par le contrôle. */
+			_toolbar: { type: "sap.m.FlexBox", multiple: false, visibility: "hidden" }
 		}
 	};
 
@@ -194,6 +206,8 @@ export default class DrawingBoard extends Control {
 	private _redoStack!: Shape[][];
 	private _boundCanvas!: HTMLCanvasElement | null;
 	private _windowBound!: boolean;
+	/** Vrai une fois le chargement automatique du croquis tenté (une seule fois). */
+	private _croquisAutoLoaded!: boolean;
 	private _retrySetupTimer!: number | null;
 	private _resizeObserver!: ResizeObserver | null;
 	private _container!: HTMLElement | null;
@@ -214,6 +228,10 @@ export default class DrawingBoard extends Control {
 	private _drawingControls!: Array<{ setVisible(b: boolean): unknown; setEnabled(b: boolean): unknown }>;
 	/** Contrôles liés à la photo (téléversement / caméra), visibles en mode photo. */
 	private _photoControls!: Array<{ setVisible(b: boolean): unknown; setEnabled(b: boolean): unknown }>;
+
+	/** Boutons de persistance backend (chargement / enregistrement du croquis). */
+	private _loadCroquisButton!: Button;
+	private _saveCroquisButton!: Button;
 
 	private _bgImage!: HTMLImageElement | null;
 	private _bgRect!: Rect | null;
@@ -253,6 +271,7 @@ export default class DrawingBoard extends Control {
 		this._pendingDragHistory = false;
 		this._boundCanvas = null;
 		this._windowBound = false;
+		this._croquisAutoLoaded = false;
 		this._retrySetupTimer = null;
 		this._resizeObserver = null;
 		this._container = null;
@@ -422,21 +441,29 @@ export default class DrawingBoard extends Control {
 		const oOpenButton = new Button({ icon: "sap-icon://open-folder", tooltip: this._getText("openProject"), press: this._onOpenProjectButtonPress.bind(this) });
 		const oDownloadButton = new Button({ icon: "sap-icon://download", tooltip: this._getText("downloadProject"), type: "Emphasized", press: this._onDownloadProject.bind(this) });
 
-		const oToolbar = new OverflowToolbar({
-			content: [
+		// Persistance backend : charger le croquis existant depuis l'opération, ou
+		// enregistrer le croquis courant comme pièce jointe de l'opération.
+		this._loadCroquisButton = new Button({ icon: "sap-icon://cloud", tooltip: this._getText("loadCroquis"), press: () => { void this._onLoadCroquis(); } });
+		this._saveCroquisButton = new Button({ icon: "sap-icon://save", tooltip: this._getText("saveCroquis"), type: "Emphasized", press: () => { void this._onSaveCroquis(); } });
+
+		// Barre d'outils à retour à la ligne : un FlexBox « Wrap » place tous les
+		// contrôles sur une seule ligne tant que la largeur le permet, puis les fait
+		// déborder sur une 2e (puis 3e…) ligne dès qu'il n'y a plus assez de place.
+		const oToolbar = new FlexBox({
+			wrap: "Wrap",
+			alignItems: "Center",
+			width: "100%",
+			items: [
 				new Title({ text: this._getText("toolsTitle") }),
 				this._modeSelector,
-				new ToolbarSeparator(),
 				oUploadButton,
 				oCameraButton,
 				this._toolSelector,
 				this._colorButton,
-				new ToolbarSeparator(),
 				new Label({ text: this._getText("objectsLabel") }),
 				this._presetSelect,
 				oInsertButton,
 				oTextButton,
-				new ToolbarSeparator(),
 				new Label({ text: this._getText("zoomLabel") }),
 				this._zoomSlider,
 				oResetButton,
@@ -449,9 +476,12 @@ export default class DrawingBoard extends Control {
 				oDeleteButton,
 				oClearButton,
 				oOpenButton,
-				oDownloadButton
+				oDownloadButton,
+				this._loadCroquisButton,
+				this._saveCroquisButton
 			]
 		});
+		oToolbar.addStyleClass("dbToolbar");
 
 		// Contrôles liés au dessin : (dés)activés selon le mode et la présence d'une photo.
 		this._drawingControls = [
@@ -548,6 +578,215 @@ export default class DrawingBoard extends Control {
 		this._interactiveControls.forEach((oControl) => {
 			oControl.setEnabled(bEditable);
 		});
+		this._applyBackendState();
+	}
+
+	/* =========================================================== */
+	/* persistance backend (pièces jointes de l'opération)         */
+	/* =========================================================== */
+
+	public setOtype(sValue: string): this {
+		this.setProperty("otype", sValue, true);
+		this._applyBackendState();
+		this._maybeAutoLoadCroquis();
+		return this;
+	}
+
+	public setObjid(sValue: string): this {
+		this.setProperty("objid", sValue, true);
+		this._applyBackendState();
+		this._maybeAutoLoadCroquis();
+		return this;
+	}
+
+	/**
+	 * API publique : déclenche l'enregistrement du croquis dans l'opération,
+	 * exactement comme le bouton « Enregistrer ». Un hôte peut l'appeler lui-même
+	 * (p. ex. à la fermeture d'une popup, avant que l'utilisateur ne quitte sans
+	 * enregistrer). Renvoie la promesse de l'opération réseau.
+	 */
+	public saveCroquis(): Promise<void> {
+		return this._onSaveCroquis();
+	}
+
+	/** API publique : (re)charge le croquis de l'opération depuis le backend. */
+	public loadCroquis(): Promise<void> {
+		return this._onLoadCroquis();
+	}
+
+	/**
+	 * Tente, une seule fois, un chargement automatique du croquis dès que le tableau
+	 * est monté et que le contexte backend (Otype + Objid) est disponible : « quand
+	 * la bibliothèque est chargée, on essaie de charger le croquis ». Silencieux si
+	 * aucun croquis n'existe encore pour l'opération.
+	 */
+	private _maybeAutoLoadCroquis(): void {
+		if (this._croquisAutoLoaded || !this._canvas || !this._hasBackendContext()) {
+			return;
+		}
+		this._croquisAutoLoaded = true;
+		void this._onLoadCroquis(true);
+	}
+
+	/** Vrai si le contrôle dispose du contexte (Otype + Objid) pour joindre l'opération. */
+	private _hasBackendContext(): boolean {
+		return !!(this.getProperty("otype") && this.getProperty("objid"));
+	}
+
+	/** (Dés)active les boutons de persistance selon l'édition et le contexte backend. */
+	private _applyBackendState(): void {
+		if (!this._loadCroquisButton || !this._saveCroquisButton) {
+			return;
+		}
+		const bEnabled = (this.getProperty("editable") as boolean) && this._hasBackendContext();
+		this._loadCroquisButton.setEnabled(bEnabled);
+		this._saveCroquisButton.setEnabled(bEnabled);
+	}
+
+	/** URL de base du service, sans barre oblique finale. */
+	private _getServiceBase(): string {
+		return (this.getProperty("serviceUrl") as string).replace(/\/+$/, "");
+	}
+
+	/**
+	 * Nom du fichier croquis : `<objid>-croquis.png`. Déterministe (pas d'horodatage)
+	 * car il n'existe qu'une seule version du croquis par objet (numéro d'avis).
+	 */
+	private _croquisFileName(): string {
+		return (this.getProperty("objid") as string) + "-croquis.png";
+	}
+
+	/** Récupère un jeton XSRF frais auprès du service OData. */
+	private async _fetchCsrfToken(): Promise<string> {
+		const oResp = await fetch(this._getServiceBase() + "/", {
+			method: "GET",
+			headers: { "x-csrf-token": "Fetch", "Accept": "application/json" },
+			credentials: "same-origin"
+		});
+		return oResp.headers.get("x-csrf-token") || "";
+	}
+
+	/** Extrait un message d'erreur lisible (statut HTTP + message serveur SAP). */
+	private async _httpErrorText(oResp: Response): Promise<string> {
+		let sBody = "";
+		try {
+			sBody = await oResp.text();
+		} catch (oError) {
+			sBody = "";
+		}
+		const oMatch = /<message[^>]*>([^<]+)<\/message>/i.exec(sBody)
+			|| /"message"\s*:\s*(?:\{[^}]*"value"\s*:\s*)?"([^"]+)"/i.exec(sBody);
+		const sMsg = oMatch ? oMatch[1] : (sBody.substring(0, 300) || oResp.statusText);
+		return oResp.status + " " + sMsg;
+	}
+
+	/**
+	 * Lit les pièces jointes « croquis » (PNG) déjà attachées à l'objet courant.
+	 * Renvoie la liste (Attid / Url / Fname) triée du plus récent au plus ancien.
+	 */
+	private async _readCroquisAttachments(): Promise<Array<{ Fname: string; Url: string; Attid: string }>> {
+		const sHeadUrl = this._getServiceBase()
+			+ "/zv_ca_c_ui5f_atta_head(Otype='" + encodeURIComponent(this.getProperty("otype") as string)
+			+ "',Objid='" + encodeURIComponent(this.getProperty("objid") as string) + "')"
+			+ "?$expand=to_Attachment&$format=json";
+		const oResp = await fetch(sHeadUrl, { headers: { "Accept": "application/json" }, credentials: "same-origin" });
+		if (!oResp.ok) {
+			throw new Error(await this._httpErrorText(oResp));
+		}
+		const oJson = await oResp.json() as {
+			d?: { to_Attachment?: { results?: Array<{ Fname: string; Url: string; Attid: string }> } };
+		};
+		const aResults = (oJson.d && oJson.d.to_Attachment && oJson.d.to_Attachment.results) || [];
+		return aResults
+			.filter((oAtt) => /croquis/i.test(oAtt.Fname) && /\.png$/i.test(oAtt.Fname))
+			.sort((a, b) => parseInt(b.Attid, 10) - parseInt(a.Attid, 10));
+	}
+
+	/** Supprime une pièce jointe croquis par sa clé (Otype/Objid/Attid). */
+	private async _deleteCroquis(sAttid: string, sToken: string): Promise<void> {
+		const sUrl = this._getServiceBase()
+			+ "/zv_ca_c_ui5f_atta_info(Otype='" + encodeURIComponent(this.getProperty("otype") as string)
+			+ "',Objid='" + encodeURIComponent(this.getProperty("objid") as string)
+			+ "',Attid='" + encodeURIComponent(sAttid) + "')";
+		await fetch(sUrl, {
+			method: "DELETE",
+			headers: { "x-csrf-token": sToken },
+			credentials: "same-origin"
+		});
+	}
+
+	/**
+	 * Enregistre le croquis courant comme pièce jointe : construit le PNG composite
+	 * (photo + tracés) avec le projet ré-éditable intégré. Comme il n'existe qu'une
+	 * version du croquis, on supprime d'abord l'éventuel croquis existant, puis on
+	 * POST le nouveau vers le service de pièces jointes.
+	 */
+	private async _onSaveCroquis(): Promise<void> {
+		if (!this._hasBackendContext()) {
+			MessageToast.show(this._getText("backendContextMissing"));
+			return;
+		}
+		const aBytes = this._buildCroquisPngBytes();
+		if (!aBytes) {
+			return;
+		}
+		try {
+			const sToken = await this._fetchCsrfToken();
+
+			// Version unique : purge des croquis précédents avant le nouvel envoi.
+			const aExisting = await this._readCroquisAttachments();
+			for (const oAtt of aExisting) {
+				await this._deleteCroquis(oAtt.Attid, sToken);
+			}
+
+			const sSlug = this.getProperty("otype") + "&&" + this.getProperty("objid") + "&&" + this._croquisFileName();
+			const oResp = await fetch(this._getServiceBase() + "/zv_ca_c_ui5f_atta_info", {
+				method: "POST",
+				headers: { "x-csrf-token": sToken, "slug": sSlug, "Content-Type": "image/png" },
+				body: new Blob([new Uint8Array(aBytes)], { type: "image/png" }),
+				credentials: "same-origin"
+			});
+			if (!oResp.ok) {
+				MessageToast.show(this._getText("saveCroquisError") + " : " + await this._httpErrorText(oResp));
+				return;
+			}
+			MessageToast.show(this._getText("saveCroquisSuccess"));
+		} catch (oError) {
+			MessageToast.show(this._getText("saveCroquisError") + " : " + (oError instanceof Error ? oError.message : String(oError)));
+		}
+	}
+
+	/**
+	 * Récupère le croquis (PNG) joint à l'objet et l'ouvre dans le tableau pour
+	 * poursuivre l'édition. Le projet ré-éditable est restauré depuis le chunk PNG.
+	 */
+	private async _onLoadCroquis(bAuto = false): Promise<void> {
+		if (!this._hasBackendContext()) {
+			if (!bAuto) {
+				MessageToast.show(this._getText("backendContextMissing"));
+			}
+			return;
+		}
+		try {
+			const aCroquis = await this._readCroquisAttachments();
+			if (aCroquis.length === 0) {
+				// Chargement automatique silencieux : ne pas alerter s'il n'y a pas
+				// encore de croquis pour l'opération.
+				if (!bAuto) {
+					MessageToast.show(this._getText("noCroquisFound"));
+				}
+				return;
+			}
+			const oFileResp = await fetch(aCroquis[0].Url, { credentials: "same-origin" });
+			if (!oFileResp.ok) {
+				MessageToast.show(this._getText("loadCroquisError") + " : " + await this._httpErrorText(oFileResp));
+				return;
+			}
+			const aBytes = new Uint8Array(await oFileResp.arrayBuffer());
+			this._loadProjectFromPngBytes(aBytes);
+		} catch (oError) {
+			MessageToast.show(this._getText("loadCroquisError") + " : " + (oError instanceof Error ? oError.message : String(oError)));
+		}
 	}
 
 	/* =========================================================== */
@@ -566,9 +805,10 @@ export default class DrawingBoard extends Control {
 		const sMode = oItem.getKey() as DrawMode;
 		this._state.mode = sMode;
 
-		// Chaque changement de mode repart d'une zone vierge : le mode photo commence
-		// vide (aucune photo, aucun dessin) et le mode dessin retrouve son trait bleu.
-		this._resetCanvasState();
+		// Le travail en cours est conservé lors d'un changement de mode : les formes
+		// sont en coordonnées monde (indépendantes du mode), donc basculer dessin ⇄
+		// photo n'efface plus ni les tracés, ni la photo, ni l'historique. Seule la
+		// couleur de trait par défaut s'adapte au mode.
 		this._state.strokeColor = sMode === "photo" ? "#ffffff" : "#0d47a1";
 		if (this._colorPopover) {
 			this._colorPopover.setDefaultColor(this._state.strokeColor);
@@ -808,13 +1048,63 @@ export default class DrawingBoard extends Control {
 	}
 
 	private _onClear(): void {
-		if (this._state.shapes.length === 0) {
+		const bHasShapes = this._state.shapes.length > 0;
+		const bHasPhoto = !!(this._bgImage && this._bgRect);
+		if (!bHasShapes && !bHasPhoto) {
 			return;
 		}
+		// Une photo est présente : demander si l'effacement doit aussi la retirer,
+		// ou ne toucher qu'aux tracés.
+		if (bHasPhoto) {
+			this._confirmClearWithPhoto(bHasShapes);
+			return;
+		}
+		// Aucune photo : effacer directement les tracés.
+		this._applyClear(false);
+	}
+
+	/** Dialogue de choix : effacer les tracés seuls, ou les tracés ET la photo. */
+	private _confirmClearWithPhoto(bHasShapes: boolean): void {
+		const oDialog = new Dialog({
+			title: this._getText("clearDialogTitle"),
+			type: "Message",
+			content: [new Text({ text: this._getText("clearDialogMessage") })],
+			buttons: [
+				new Button({
+					text: this._getText("clearDrawingsOnly"),
+					// Rien à effacer côté tracés : proposer seulement le retrait photo.
+					enabled: bHasShapes,
+					press: () => { oDialog.close(); this._applyClear(false); }
+				}),
+				new Button({
+					text: this._getText("clearAllWithPhoto"),
+					type: "Reject",
+					press: () => { oDialog.close(); this._applyClear(true); }
+				}),
+				new Button({
+					text: this._getText("cancel"),
+					press: () => oDialog.close()
+				})
+			],
+			afterClose: () => oDialog.destroy()
+		});
+		this.addDependent(oDialog);
+		oDialog.open();
+	}
+
+	/** Efface les tracés (et, si demandé, la photo de fond), puis repeint. */
+	private _applyClear(bAlsoPhoto: boolean): void {
 		this._pushHistory();
 		this._state.shapes = [];
 		this._state.draft = null;
 		this._state.selectedShapeId = null;
+		if (bAlsoPhoto) {
+			// Note : l'historique ne mémorise que les tracés ; le retrait de la photo
+			// n'est donc pas annulable (Annuler restaure les tracés, pas la photo).
+			this._bgImage = null;
+			this._bgRect = null;
+			this._applyMode();
+		}
 		this._render();
 		MessageToast.show(this._getText("canvasCleared"));
 	}
@@ -852,10 +1142,15 @@ export default class DrawingBoard extends Control {
 	 * (photo + tracés), et un chunk `tEXt` caché contient le projet ré-éditable
 	 * (image d'origine + lignes en coordonnées pixel de l'image).
 	 */
-	private _onDownloadProject(): void {
+	/**
+	 * Construit les octets du PNG composite (photo + tracés) avec le projet
+	 * ré-éditable intégré dans un chunk `tEXt`. Renvoie `null` si le canevas ne
+	 * peut être exporté (image externe « tainted »).
+	 */
+	private _buildCroquisPngBytes(): Uint8Array | null {
 		const oComposite = this._buildCompositeCanvas();
 		if (!oComposite) {
-			return;
+			return null;
 		}
 
 		let sPngDataUrl: string;
@@ -865,7 +1160,7 @@ export default class DrawingBoard extends Control {
 			// Canevas « tainted » (image d'origine chargée depuis une URL externe
 			// sans CORS) : impossible d'exporter les pixels.
 			MessageToast.show(this._getText("exportTaintError"));
-			return;
+			return null;
 		}
 
 		const oProject = this._serializeProject(oComposite.width, oComposite.height);
@@ -876,6 +1171,14 @@ export default class DrawingBoard extends Control {
 			aPngBytes = insertTextChunk(aPngBytes, PROJECT_CHUNK_KEYWORD, sBase64);
 		} catch (oError) {
 			// À défaut, on laisse le PNG sans métadonnées plutôt que d'échouer.
+		}
+		return aPngBytes;
+	}
+
+	private _onDownloadProject(): void {
+		const aPngBytes = this._buildCroquisPngBytes();
+		if (!aPngBytes) {
+			return;
 		}
 
 		// Copie sur un ArrayBuffer concret (les typings récents refusent ArrayBufferLike).
@@ -973,6 +1276,10 @@ export default class DrawingBoard extends Control {
 
 	/** Construit l'objet projet sérialisable pour le PNG. */
 	private _serializeProject(iWidth: number, iHeight: number): DrawProject {
+		// La photo fait partie du croquis dès qu'elle existe en mémoire, même si la
+		// vue est repassée sur le canevas (où elle est simplement masquée). On la
+		// persiste donc indépendamment du mode courant, afin qu'un enregistrement
+		// fait depuis le canevas ne « perde » pas la photo.
 		const bHasImage = !!(this._bgImage && this._bgRect);
 		const aShapes = this._state.shapes.map((oShape) => {
 			return bHasImage ? this._convertShape(oShape, true) : this._cloneShape(oShape);
@@ -991,7 +1298,9 @@ export default class DrawingBoard extends Control {
 		return {
 			type: "zab.be.resa.draw.project",
 			version: 1,
-			mode: this._state.mode,
+			// Un croquis qui porte une photo se rouvre en mode photo pour que la photo
+			// soit visible au rechargement (sinon le canevas la masquerait).
+			mode: bHasImage ? "photo" : this._state.mode,
 			strokeColor: this._state.strokeColor,
 			coordinateSpace: bHasImage ? "image-pixels" : "world",
 			width: iWidth,
@@ -1030,6 +1339,8 @@ export default class DrawingBoard extends Control {
 	 * tracés (mode photo), ou tracés sur fond blanc en coordonnées monde à défaut.
 	 */
 	private _buildCompositeCanvas(): HTMLCanvasElement | null {
+		// Le composite intègre la photo dès qu'elle existe (même si la vue est sur le
+		// canevas, qui la masque) : l'enregistrement conserve toujours la photo.
 		if (this._bgImage && this._bgRect) {
 			const iW = this._bgImage.naturalWidth;
 			const iH = this._bgImage.naturalHeight;
@@ -1141,22 +1452,29 @@ export default class DrawingBoard extends Control {
 		// PNG : chercher le chunk projet ; à défaut, charger comme simple image.
 		const oReader = new FileReader();
 		oReader.onload = () => {
-			const aBytes = new Uint8Array(oReader.result as ArrayBuffer);
-			const sBase64 = readTextChunk(aBytes, PROJECT_CHUNK_KEYWORD);
-			if (sBase64) {
-				try {
-					this._parseAndLoadProjectJson(decodeBase64ToUtf8(sBase64));
-					return;
-				} catch (oError) {
-					MessageToast.show(this._getText("openError"));
-					return;
-				}
-			}
-			// Pas de métadonnées : on traite le PNG comme une photo à annoter.
-			this._loadPlainImageAsPhoto(this._dataUrlFromBytes(aBytes, "image/png"));
+			this._loadProjectFromPngBytes(new Uint8Array(oReader.result as ArrayBuffer));
 		};
 		oReader.onerror = () => MessageToast.show(this._getText("openError"));
 		oReader.readAsArrayBuffer(oFile);
+	}
+
+	/**
+	 * Charge un projet depuis les octets d'un PNG : restaure le projet ré-éditable
+	 * s'il est présent dans le chunk `tEXt`, sinon ouvre l'image comme photo à annoter.
+	 */
+	private _loadProjectFromPngBytes(aBytes: Uint8Array): void {
+		const sBase64 = readTextChunk(aBytes, PROJECT_CHUNK_KEYWORD);
+		if (sBase64) {
+			try {
+				this._parseAndLoadProjectJson(decodeBase64ToUtf8(sBase64));
+				return;
+			} catch (oError) {
+				MessageToast.show(this._getText("openError"));
+				return;
+			}
+		}
+		// Pas de métadonnées : on traite le PNG comme une photo à annoter.
+		this._loadPlainImageAsPhoto(this._dataUrlFromBytes(aBytes, "image/png"));
 	}
 
 	private _dataUrlFromBytes(aBytes: Uint8Array, sMime: string): string {
@@ -1616,6 +1934,9 @@ export default class DrawingBoard extends Control {
 		}
 
 		this._resizeCanvas();
+
+		// Le tableau est monté et dimensionné : tenter le chargement auto du croquis.
+		this._maybeAutoLoadCroquis();
 	}
 
 	private _detachCanvasListeners(oCanvas: HTMLCanvasElement | null): void {
@@ -2318,7 +2639,10 @@ export default class DrawingBoard extends Control {
 		this._ctx.translate(this._state.panX, this._state.panY);
 		this._ctx.scale(this._state.zoom, this._state.zoom);
 
-		if (this._bgImage && this._bgRect) {
+		// La photo n'est peinte qu'en mode photo : de retour sur le canevas, elle
+		// reste en mémoire (le rebasculement en mode photo la réaffiche) mais
+		// n'apparaît pas sous les tracés.
+		if (this._state.mode === "photo" && this._bgImage && this._bgRect) {
 			this._ctx.drawImage(this._bgImage, this._bgRect.x, this._bgRect.y, this._bgRect.w, this._bgRect.h);
 		}
 
