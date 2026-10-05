@@ -36,6 +36,7 @@ export default class Component extends UIComponent {
 	 * URL de la bibliothèque, déduite de l'URL de l'application :
 	 * - SAP BTP / Work Zone : l'application est servie sous
 	 *   `/[<guid instance destination>.]zabberesadraw.zabberesazuidrawapp[-<version>]/` ;
+	 *   (Work Zone peut y ajouter des segments, ex. cache-buster `~…~/`) ;
 	 *   la bibliothèque est déployée dans le même app-host et se trouve sous le même
 	 *   préfixe : `/[<guid>.]zabberesadraw.zabberesadraw/`.
 	 * - En local (ui5.yaml / ui5-local.yaml) : servie par fiori-tools-servestatic
@@ -43,7 +44,7 @@ export default class Component extends UIComponent {
 	 */
 	private static getDrawLibraryUrl(): string {
 		const sAppPath = new URL(sap.ui.require.toUrl("zab/be/resa/zuidrawapp") + "/", document.baseURI).pathname;
-		const oMatch = /^(.*\/)([^/]*?)zabberesazuidrawapp(?:-[^/]*)?\/+$/.exec(sAppPath);
+		const oMatch = /^(.*\/)([^/]*?)zabberesazuidrawapp(?:-[^/]*)?\//.exec(sAppPath);
 		return oMatch ? oMatch[1] + oMatch[2] + "zabberesadraw/" : "/resources/zab/be/resa/draw/";
 	}
 }
